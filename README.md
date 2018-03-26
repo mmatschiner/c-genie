@@ -21,7 +21,7 @@ To be written
 #### Running c-genie
 
 Run with e.g.
-./c-genie primates.tre primates.html -l 100000 -n 100000 -t 100000 -c 7
+`./c-genie primates.tre primates.html -l 100000 -n 100000 -t 100000 -c 7`
 
 <!-- #### c-genie output
 

@@ -405,6 +405,7 @@ import statistics
 import numpy as np
 import scipy.special as special
 import threading
+from random import randint
 
 # Set the exit flag.
 exitFlag = 0
@@ -770,9 +771,11 @@ while len(tree_sequences) < target_n_c_genes:
             new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, recombination_map=msprime.RecombinationMap.read_hapmap(rec_map), random_seed=random.randint(1, 10000000))
         else:
             new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, length=chr_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
-        new_tree_sequence_list = list(new_tree_sequence_obj.newick_trees())
-        for i in new_tree_sequence_list:
-            tree_sequences.append(i)
+            for tree in new_tree_sequence_obj.trees():
+                this_tree_to_append = []
+                this_tree_to_append.append(tree.interval[1]-tree.interval[0])
+                this_tree_to_append.append(tree.newick())
+                tree_sequences.append(this_tree_to_append)
 
 # Feedback.
 print(' done.')
@@ -786,7 +789,7 @@ tract_sizes = []
 tree_strings = []
 topology_strings = []
 for length_and_tree in tree_sequences:
-    length = length_and_tree[0]
+    length = int(length_and_tree[0])
     tree_string = length_and_tree[1].rstrip(';')
     topology_string = re.sub(r':\d+\.\d+','', tree_string)
     c_gene_sizes.append(length)
@@ -796,6 +799,7 @@ for length_and_tree in tree_sequences:
 # Compare each tree with the one before to identify topology breakpoints.
 previous_topology_string = topology_strings[0]
 previous_topology_length = c_gene_sizes[0]
+num_topology_changes = 0
 for x in range(1, len(topology_strings)):
     # Only parse trees if the topology strings differ.
     if topology_strings[x] != previous_topology_string:
@@ -821,6 +825,7 @@ for x in range(1, len(topology_strings)):
                 clades2.append(extant_progeny_ids)
         clades2.sort()
         if clades1 != clades2:
+            num_topology_changes = num_topology_changes + 1
             tract_sizes.append(previous_topology_length)
             previous_topology_length = c_gene_sizes[x]
         else:
@@ -829,6 +834,11 @@ for x in range(1, len(topology_strings)):
         previous_topology_length += c_gene_sizes[x]
     previous_topology_string = topology_strings[x]
 
+#if there have not been any topology changes, set the tract lengths to equal the lengths of the simulated chromosomes
+if num_topology_changes == 0:
+    tract_sizes = [chr_length for x in range(n_chr_simulated)]
+
+
 # Remove the last c-gene size as it is truncated not by recombination, but by the chromosome end.
 c_gene_sizes = c_gene_sizes[:-1]
 
@@ -836,8 +846,80 @@ c_gene_sizes = c_gene_sizes[:-1]
 c_gene_sizes_sum = sum(c_gene_sizes)
 tract_sizes_sum = sum(tract_sizes)
 
+
 # Feedback.
 print(' done.')
+
+# Feedback.
+print('    Simulating gene sequence alignments for "gene tree" estimation...', end='', flush=True)
+
+# Simulate "gene tree" sequences:
+# defaults: 1000 sequences of 10kb each,
+DNA_alphabet = ['A','C','G','T']
+gene_length = 1000
+gene_number = 1
+if rec_map != None:
+    #  here: mutation_rate == 2e-8
+   new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=2e-8, recombination_map=msprime.RecombinationMap.read_hapmap(rec_map), random_seed=random.randint(1, 10000000))
+else:
+   alignment_file = open(str(outfile.name)+'_alignment.phy','w')
+   for i in range(0, gene_number):
+       alignment = []
+       new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=rec_rate, length=gene_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
+       for sp in range(0,len(species_ids)):
+           alignment.append("")
+       
+       n_variants = 0
+       in_gene_position = 0    
+       for variant in new_tree_sequence_obj.variants():
+            vp = int(variant.site.position)
+            if vp > in_gene_position:  # exclude multiple mutations at the same site (i.e. at the moment we generate only biallelic sites) TO DO: make multiallelics in these cases
+                #print("vp: " + str(vp))
+                # fill in invariable sites
+                for bp in range(in_gene_position,vp-1):
+                    r = randint(0, 3)
+                    thisBase = DNA_alphabet[r]
+                    for sp in range(0,len(species_ids)):
+                       alignment[sp] =  alignment[sp] + thisBase
+                
+                in_gene_position = vp
+                n_variants = n_variants + 1
+                ra = randint(0, 3)
+                ancestralBase = DNA_alphabet[ra]
+                derivedPossibilities = DNA_alphabet[:ra] +  DNA_alphabet[ra+1:]
+                rd = randint(0, 2)
+                derivedBase = derivedPossibilities[rd]
+                ancestralDerivedDNA = [ancestralBase,derivedBase]
+                for sp in range(0,len(species_ids)):
+                   alignment[sp] =  alignment[sp] + ancestralDerivedDNA[variant.genotypes[sp]]
+     
+       # fill in invariable sites at the end of alignment
+       for bp in range(in_gene_position,gene_length):
+           r = randint(0, 3)
+           thisBase = DNA_alphabet[r]
+           for sp in range(0,len(species_ids)):
+               alignment[sp] =  alignment[sp] + thisBase  
+       
+       #print("gene_length: " + str(gene_length))
+       #print("len(alignment[0]): " + str(len(alignment[0])))
+       #print("len(alignment[1]): " + str(len(alignment[1])))
+       alignment_file.write(str(len(species_ids))+" "+str(gene_length)+"\n")
+       alignment_dict = {}
+       for sp in range(0,len(species_ids)):
+            alignment_file.write(species_ids[sp]+'\t'+alignment[sp]+"\n")
+            alignment_dict[species_ids[sp]] = alignment[sp]
+            print(species_ids[sp]+'\t'+alignment[sp])
+       
+       alignment_file.write("\n")
+       
+   #'phyml -i sequences -n XX -b 0 -m JC69 -f e --no_memory_check --r_seed 100 --run_id ID string '
+   alignment_file.close()
+
+
+
+# Feedback.
+print(' done.')
+
 
 # Feedback.
 print('    Preparing c-gene plots...', end='', flush=True)
@@ -1499,7 +1581,9 @@ for _ in range(200000):
         best_fit = fit
 wb_k = best_wb_k
 wb_lambda = best_wb_lambda
-if wb_k < 1:
+if wb_k == None:
+    wb_start = None
+elif wb_k < 1:
     wb_start = None
 elif wb_k == 1:
     wb_start = 1/wb_lambda

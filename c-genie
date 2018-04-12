@@ -406,6 +406,7 @@ import numpy as np
 import scipy.special as special
 import threading
 from random import randint
+from subprocess import call
 
 # Set the exit flag.
 exitFlag = 0
@@ -483,6 +484,21 @@ parser.add_argument(
     help='target number of c-genes (default: 10000)'
         )
 parser.add_argument(
+    '-a',
+    nargs=2,
+    type=int,
+    dest='alignment_genes',
+    help='the number and length of alignments to generate for "gene tree" reconstruction (default: None)'
+        )
+parser.add_argument(
+    '-u',
+    nargs=1,
+    type=float,
+    default=[2e-8],
+    dest='mutation_rate',
+    help='the per-genration mutation rate; used to generate the alignments for "gene tree" reconstruction (default: 2e-8)'
+        )
+parser.add_argument(
     '-c',
     nargs=1,
     type=int,
@@ -516,6 +532,10 @@ target_n_c_genes = args.n_c_genes[0]
 n_cpus = args.n_cpus[0]
 infile = args.infile
 outfile = args.outfile
+if args.alignment_genes != None:
+   alignment_genes_number = args.alignment_genes[0]
+   alignment_genes_length = args.alignment_genes[1]
+   mut_rate = args.mutation_rate[0]
 if infile.isatty():
     print('No input file specified, and no input piped through stdin!')
     print('Use \'-h\' to see available options.')
@@ -547,6 +567,10 @@ if rec_map == None:
 else:
     print('    Recombination map file name: {}'.format(rec_map))
     print('    Chromosome length (from map): {}'.format(chr_length))
+if args.alignment_genes != None:
+    print('    Number of alignments to generate for "gene tree" reconstruction: {}'.format(alignment_genes_number))
+    print('    The length of alignments generated for "gene tree" reconstruction: {}'.format(alignment_genes_length))
+    print('    The mutation rate used to generate alignments for "gene tree" reconstruction: {}'.format(mut_rate))
 print('    Target number of c-genes: {}'.format(target_n_c_genes))
 print('    Number of cpus: {}'.format(n_cpus))
 print('')
@@ -850,75 +874,82 @@ tract_sizes_sum = sum(tract_sizes)
 # Feedback.
 print(' done.')
 
-# Feedback.
-print('    Simulating gene sequence alignments for "gene tree" estimation...', end='', flush=True)
 
-# Simulate "gene tree" sequences:
-# defaults: 1000 sequences of 10kb each,
-DNA_alphabet = ['A','C','G','T']
-gene_length = 1000
-gene_number = 1
-if rec_map != None:
-    #  here: mutation_rate == 2e-8
-   new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=2e-8, recombination_map=msprime.RecombinationMap.read_hapmap(rec_map), random_seed=random.randint(1, 10000000))
-else:
-   alignment_file = open(str(outfile.name)+'_alignment.phy','w')
-   for i in range(0, gene_number):
-       alignment = []
-       new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=rec_rate, length=gene_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
-       for sp in range(0,len(species_ids)):
-           alignment.append("")
-       
-       n_variants = 0
-       in_gene_position = 0    
-       for variant in new_tree_sequence_obj.variants():
-            vp = int(variant.site.position)
-            if vp > in_gene_position:  # exclude multiple mutations at the same site (i.e. at the moment we generate only biallelic sites) TO DO: make multiallelics in these cases
-                #print("vp: " + str(vp))
-                # fill in invariable sites
-                for bp in range(in_gene_position,vp-1):
-                    r = randint(0, 3)
-                    thisBase = DNA_alphabet[r]
-                    for sp in range(0,len(species_ids)):
-                       alignment[sp] =  alignment[sp] + thisBase
-                
-                in_gene_position = vp
-                n_variants = n_variants + 1
-                ra = randint(0, 3)
-                ancestralBase = DNA_alphabet[ra]
-                derivedPossibilities = DNA_alphabet[:ra] +  DNA_alphabet[ra+1:]
-                rd = randint(0, 2)
-                derivedBase = derivedPossibilities[rd]
-                ancestralDerivedDNA = [ancestralBase,derivedBase]
-                for sp in range(0,len(species_ids)):
-                   alignment[sp] =  alignment[sp] + ancestralDerivedDNA[variant.genotypes[sp]]
-     
-       # fill in invariable sites at the end of alignment
-       for bp in range(in_gene_position,gene_length):
-           r = randint(0, 3)
-           thisBase = DNA_alphabet[r]
+# Simulate "gene tree" sequence alignments:
+# For now not compatible with the recombination map
+if args.alignment_genes != None:
+    # Feedback.
+    print('    Simulating gene sequence alignments for "gene tree" estimation...', end='', flush=True)
+    DNA_alphabet = ['A','C','G','T']
+    gene_number = alignment_genes_number
+    gene_length = alignment_genes_length
+    if rec_map != None:
+        #  here: mutation_rate == 2e-8
+       new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=2e-8, recombination_map=msprime.RecombinationMap.read_hapmap(rec_map), random_seed=random.randint(1, 10000000))
+    else:
+       if str(outfile.name).endswith('.html'):
+          f = str(outfile.name)[:-5] 
+       alignment_file = open(f+'_alignment.phy','w')
+       for i in range(0, gene_number):
+           alignment = []
+           new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=mut_rate, length=gene_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
            for sp in range(0,len(species_ids)):
-               alignment[sp] =  alignment[sp] + thisBase  
-       
-       #print("gene_length: " + str(gene_length))
-       #print("len(alignment[0]): " + str(len(alignment[0])))
-       #print("len(alignment[1]): " + str(len(alignment[1])))
-       alignment_file.write(str(len(species_ids))+" "+str(gene_length)+"\n")
-       alignment_dict = {}
-       for sp in range(0,len(species_ids)):
-            alignment_file.write(species_ids[sp]+'\t'+alignment[sp]+"\n")
-            alignment_dict[species_ids[sp]] = alignment[sp]
-            print(species_ids[sp]+'\t'+alignment[sp])
-       
-       alignment_file.write("\n")
-       
-   #'phyml -i sequences -n XX -b 0 -m JC69 -f e --no_memory_check --r_seed 100 --run_id ID string '
-   alignment_file.close()
-
-
-
-# Feedback.
-print(' done.')
+               alignment.append("")
+           
+           n_variants = 0
+           in_gene_position = 0    
+           for variant in new_tree_sequence_obj.variants():
+                vp = int(variant.site.position)
+                if vp > in_gene_position:  # exclude multiple mutations at the same site (i.e. at the moment we generate only biallelic sites) TO DO: make multiallelics in these cases
+                    #print("vp: " + str(vp))
+                    # fill in invariable sites
+                    for bp in range(in_gene_position,vp-1):
+                        r = randint(0, 3)
+                        thisBase = DNA_alphabet[r]
+                        for sp in range(0,len(species_ids)):
+                           alignment[sp] =  alignment[sp] + thisBase
+                    
+                    in_gene_position = vp
+                    n_variants = n_variants + 1
+                    ra = randint(0, 3)
+                    ancestralBase = DNA_alphabet[ra]
+                    derivedPossibilities = DNA_alphabet[:ra] +  DNA_alphabet[ra+1:]
+                    rd = randint(0, 2)
+                    derivedBase = derivedPossibilities[rd]
+                    ancestralDerivedDNA = [ancestralBase,derivedBase]
+                    for sp in range(0,len(species_ids)):
+                       alignment[sp] =  alignment[sp] + ancestralDerivedDNA[variant.genotypes[sp]]
+         
+           # fill in invariable sites at the end of alignment
+           for bp in range(in_gene_position,gene_length):
+               r = randint(0, 3)
+               thisBase = DNA_alphabet[r]
+               for sp in range(0,len(species_ids)):
+                   alignment[sp] =  alignment[sp] + thisBase  
+           
+           #print("gene_length: " + str(gene_length))
+           #print("len(alignment[0]): " + str(len(alignment[0])))
+           #print("len(alignment[1]): " + str(len(alignment[1])))
+           alignment_file.write(str(len(species_ids))+" "+str(gene_length)+"\n")
+           alignment_dict = {}
+           for sp in range(0,len(species_ids)):
+                alignment_file.write(species_ids[sp]+'\t'+alignment[sp]+"\n")
+                alignment_dict[species_ids[sp]] = alignment[sp]
+                #print(species_ids[sp]+'\t'+alignment[sp])
+           
+           alignment_file.write("\n")
+           
+           # More feedback
+           if i % 100 == 0:
+              print('.', end='', flush=True)
+           
+       alignment_file.close()
+       phymlCommand = 'phyml -i ' + os.path.basename(alignment_file.name) + '-n ' + str(gene_number) + '-b 0 -m JC69 -f e --no_memory_check --r_seed 100 --run_id phymlTest'
+       #call(phymlCommand)
+    
+    
+    # Feedback.
+    print(' done.')
 
 
 # Feedback.

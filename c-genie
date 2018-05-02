@@ -491,6 +491,14 @@ parser.add_argument(
     help='the number and length of alignments to generate for "gene tree" reconstruction (default: None)'
         )
 parser.add_argument(
+    '--only_alignments',
+    nargs=1,
+    type=int,
+    default=[0],
+    dest='only_alignments',
+    help='do not do c-gene analysis; only output alignments for "gene tree" reconstruction (default: 0)'
+        )
+parser.add_argument(
     '-u',
     nargs=1,
     type=float,
@@ -536,6 +544,7 @@ if args.alignment_genes != None:
    alignment_genes_number = args.alignment_genes[0]
    alignment_genes_length = args.alignment_genes[1]
    mut_rate = args.mutation_rate[0]
+   only_alignments = args.only_alignments[0]
 if infile.isatty():
     print('No input file specified, and no input piped through stdin!')
     print('Use \'-h\' to see available options.')
@@ -571,6 +580,8 @@ if args.alignment_genes != None:
     print('    Number of alignments to generate for "gene tree" reconstruction: {}'.format(alignment_genes_number))
     print('    The length of alignments generated for "gene tree" reconstruction: {}'.format(alignment_genes_length))
     print('    The mutation rate used to generate alignments for "gene tree" reconstruction: {}'.format(mut_rate))
+    if only_alignments == 1:
+        print('    C-gene analysis is not going to be done; only generating alignments for "gene tree" reconstruction')
 print('    Target number of c-genes: {}'.format(target_n_c_genes))
 print('    Number of cpus: {}'.format(n_cpus))
 print('')
@@ -804,75 +815,76 @@ while len(tree_sequences) < target_n_c_genes:
 # Feedback.
 print(' done.')
 
+if only_alignments == 0:
 # Feedback.
-print('    Analyzing msprime output...', end='', flush=True)
-
-# Analyse msprime results.
-c_gene_sizes = []
-tract_sizes = []
-tree_strings = []
-topology_strings = []
-for length_and_tree in tree_sequences:
-    length = int(length_and_tree[0])
-    tree_string = length_and_tree[1].rstrip(';')
-    topology_string = re.sub(r':\d+\.\d+','', tree_string)
-    c_gene_sizes.append(length)
-    tree_strings.append(tree_string)
-    topology_strings.append(topology_string)
-
-# Compare each tree with the one before to identify topology breakpoints.
-previous_topology_string = topology_strings[0]
-previous_topology_length = c_gene_sizes[0]
-num_topology_changes = 0
-for x in range(1, len(topology_strings)):
-    # Only parse trees if the topology strings differ.
-    if topology_strings[x] != previous_topology_string:
-        # Make sure the two trees are really different.
-        tree1 = Tree(tree_strings[x-1])
-        tree1.parse_newick_string()
-        tree1.set_extant_progeny_ids()
-        tree2 = Tree(tree_strings[x])
-        tree2.parse_newick_string()
-        tree2.set_extant_progeny_ids()
-        clades1 = []
-        for edge in tree1.get_edges():
-            extant_progeny_ids = edge.get_extant_progeny_ids()
-            extant_progeny_ids.sort()
-            if len(extant_progeny_ids) > 1:
-                clades1.append(extant_progeny_ids)
-        clades1.sort()
-        clades2 = []
-        for edge in tree2.get_edges():
-            extant_progeny_ids = edge.get_extant_progeny_ids()
-            extant_progeny_ids.sort()
-            if len(extant_progeny_ids) > 1:
-                clades2.append(extant_progeny_ids)
-        clades2.sort()
-        if clades1 != clades2:
-            num_topology_changes = num_topology_changes + 1
-            tract_sizes.append(previous_topology_length)
-            previous_topology_length = c_gene_sizes[x]
+    print('    Analyzing msprime output...', end='', flush=True)
+    
+    # Analyse msprime results.
+    c_gene_sizes = []
+    tract_sizes = []
+    tree_strings = []
+    topology_strings = []
+    for length_and_tree in tree_sequences:
+        length = int(length_and_tree[0])
+        tree_string = length_and_tree[1].rstrip(';')
+        topology_string = re.sub(r':\d+\.\d+','', tree_string)
+        c_gene_sizes.append(length)
+        tree_strings.append(tree_string)
+        topology_strings.append(topology_string)
+    
+    # Compare each tree with the one before to identify topology breakpoints.
+    previous_topology_string = topology_strings[0]
+    previous_topology_length = c_gene_sizes[0]
+    num_topology_changes = 0
+    for x in range(1, len(topology_strings)):
+        # Only parse trees if the topology strings differ.
+        if topology_strings[x] != previous_topology_string:
+            # Make sure the two trees are really different.
+            tree1 = Tree(tree_strings[x-1])
+            tree1.parse_newick_string()
+            tree1.set_extant_progeny_ids()
+            tree2 = Tree(tree_strings[x])
+            tree2.parse_newick_string()
+            tree2.set_extant_progeny_ids()
+            clades1 = []
+            for edge in tree1.get_edges():
+                extant_progeny_ids = edge.get_extant_progeny_ids()
+                extant_progeny_ids.sort()
+                if len(extant_progeny_ids) > 1:
+                    clades1.append(extant_progeny_ids)
+            clades1.sort()
+            clades2 = []
+            for edge in tree2.get_edges():
+                extant_progeny_ids = edge.get_extant_progeny_ids()
+                extant_progeny_ids.sort()
+                if len(extant_progeny_ids) > 1:
+                    clades2.append(extant_progeny_ids)
+            clades2.sort()
+            if clades1 != clades2:
+                num_topology_changes = num_topology_changes + 1
+                tract_sizes.append(previous_topology_length)
+                previous_topology_length = c_gene_sizes[x]
+            else:
+                previous_topology_length += c_gene_sizes[x]
         else:
             previous_topology_length += c_gene_sizes[x]
-    else:
-        previous_topology_length += c_gene_sizes[x]
-    previous_topology_string = topology_strings[x]
-
-#if there have not been any topology changes, set the tract lengths to equal the lengths of the simulated chromosomes
-if num_topology_changes == 0:
-    tract_sizes = [chr_length for x in range(n_chr_simulated)]
-
-
-# Remove the last c-gene size as it is truncated not by recombination, but by the chromosome end.
-c_gene_sizes = c_gene_sizes[:-1]
-
-# Get the total length of c-genes and tracts.
-c_gene_sizes_sum = sum(c_gene_sizes)
-tract_sizes_sum = sum(tract_sizes)
-
-
-# Feedback.
-print(' done.')
+        previous_topology_string = topology_strings[x]
+    
+    #if there have not been any topology changes, set the tract lengths to equal the lengths of the simulated chromosomes
+    if num_topology_changes == 0:
+        tract_sizes = [chr_length for x in range(n_chr_simulated)]
+    
+    
+    # Remove the last c-gene size as it is truncated not by recombination, but by the chromosome end.
+    c_gene_sizes = c_gene_sizes[:-1]
+    
+    # Get the total length of c-genes and tracts.
+    c_gene_sizes_sum = sum(c_gene_sizes)
+    tract_sizes_sum = sum(tract_sizes)
+    
+    
+    # Feedback.
+    print(' done.')
 
 
 # Simulate "gene tree" sequence alignments:
@@ -950,6 +962,8 @@ if args.alignment_genes != None:
     
     # Feedback.
     print(' done.')
+    if only_alignments == 1:
+        sys.exit(0);
 
 
 # Feedback.

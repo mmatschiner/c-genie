@@ -406,7 +406,6 @@ import numpy as np
 import scipy.special as special
 import threading
 from random import randint
-from subprocess import call
 
 # Set the exit flag.
 exitFlag = 0
@@ -429,7 +428,7 @@ parser = argparse.ArgumentParser(
       the genome or according to a provided recombination map.
 
       Run c-genie e.g. with
-      ./c-genie example.tre example.html -n 10000 -g 3 -r 2e-8 -l 1000000
+      ./c-genie primates.tre primates -n 10000 -g 3 -r 2e-8 -l 1000000
     '''))
 parser.add_argument(
     '-v', '--version',
@@ -483,27 +482,36 @@ parser.add_argument(
     dest='n_c_genes',
     help='target number of c-genes (default: 10000)'
         )
-parser.add_argument(
+group = parser.add_argument_group('optional arguments for generating alignments')
+
+group.add_argument(
     '-a',
-    nargs=2,
-    type=int,
-    dest='alignment_genes',
-    help='the number and length of alignments to generate for "gene tree" reconstruction (default: None)'
-        )
-parser.add_argument(
-    '--only_alignments',
     nargs=1,
     type=int,
     default=[0],
-    dest='only_alignments',
-    help='do not do c-gene analysis; only output alignments for "gene tree" reconstruction (default: 0)'
+    dest='n_alignments',
+    help='number of alignments to generate for "gene tree" reconstruction (default: 0)'
         )
-parser.add_argument(
+group.add_argument(
+    '-al',
+    nargs=1,
+    type=int,
+    default=[1000],
+    dest='aln_length',
+    help='Length of each generated alignment (only used with option "-a") (default: 1000)'
+        )
+group.add_argument(
+    '-x',
+    action='store_true',
+    dest='exclude',
+    help='do not run c-gene analysis; only output alignments for "gene tree" reconstruction (default: off)'
+        )
+group.add_argument(
     '-u',
     nargs=1,
     type=float,
     default=[2e-8],
-    dest='mutation_rate',
+    dest='mut_rate',
     help='the per-genration mutation rate; used to generate the alignments for "gene tree" reconstruction (default: 2e-8)'
         )
 parser.add_argument(
@@ -522,11 +530,11 @@ parser.add_argument(
     help='name of the input file with a time-calibrated tree in newick format, with branch lengths in units of myr'
     )
 parser.add_argument(
-    'outfile',
-    nargs='?',
-    type=argparse.FileType('w'),
-    default=sys.stdout,
-    help='name of the output file in html format'
+    'prefix',
+    nargs=1,
+    type=str,
+    default=["out"],
+    help='prefix for output file names (default: out)'
     )
 args = parser.parse_args()
 pop_size = args.pop_size[0]
@@ -539,12 +547,15 @@ chr_length = args.chr_length[0]
 target_n_c_genes = args.n_c_genes[0]
 n_cpus = args.n_cpus[0]
 infile = args.infile
-outfile = args.outfile
-if args.alignment_genes != None:
-   alignment_genes_number = args.alignment_genes[0]
-   alignment_genes_length = args.alignment_genes[1]
-   mut_rate = args.mutation_rate[0]
-   only_alignments = args.only_alignments[0]
+html_outfile_name = args.prefix[0] + '.html'
+phylip_outfile_name = args.prefix[0] + '.phy'
+n_alignments = args.n_alignments[0]
+exclude_c_genes = False
+if n_alignments > 0:
+   alignment_length = args.aln_length[0]
+   mut_rate = args.mut_rate[0]
+   exclude_c_genes = args.exclude
+   alignment_file = open(phylip_outfile_name,'w')
 if infile.isatty():
     print('No input file specified, and no input piped through stdin!')
     print('Use \'-h\' to see available options.')
@@ -567,7 +578,9 @@ print('------------------------------------------------------------')
 print('')
 print('  Input:')
 print('    Tree input file name: {}'.format(infile.name))
-print('    HTML output file name: {}'.format(outfile.name))
+print('    HTML output file name: {}'.format(html_outfile_name))
+if n_alignments > 0:
+    print('    Alignment output file name: {}'.format(phylip_outfile_name))
 print('    Population size: {}'.format(pop_size))
 print('    Generation time: {}'.format(gen_time))
 if rec_map == None:
@@ -576,14 +589,15 @@ if rec_map == None:
 else:
     print('    Recombination map file name: {}'.format(rec_map))
     print('    Chromosome length (from map): {}'.format(chr_length))
-if args.alignment_genes != None:
-    print('    Number of alignments to generate for "gene tree" reconstruction: {}'.format(alignment_genes_number))
-    print('    The length of alignments generated for "gene tree" reconstruction: {}'.format(alignment_genes_length))
+print('    Number of cpus: {}'.format(n_cpus))
+if n_alignments > 0:
+    print('   ')
+    print('    Number of alignments to generate for "gene tree" reconstruction: {}'.format(n_alignments))
+    print('    The length of alignments generated for "gene tree" reconstruction: {}'.format(alignment_length))
     print('    The mutation rate used to generate alignments for "gene tree" reconstruction: {}'.format(mut_rate))
-    if only_alignments == 1:
+    if exclude_c_genes:
         print('    C-gene analysis is not going to be done; only generating alignments for "gene tree" reconstruction')
 print('    Target number of c-genes: {}'.format(target_n_c_genes))
-print('    Number of cpus: {}'.format(n_cpus))
 print('')
 
 # Read the input file.
@@ -806,16 +820,16 @@ while len(tree_sequences) < target_n_c_genes:
             new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, recombination_map=msprime.RecombinationMap.read_hapmap(rec_map), random_seed=random.randint(1, 10000000))
         else:
             new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, length=chr_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
-            for tree in new_tree_sequence_obj.trees():
-                this_tree_to_append = []
-                this_tree_to_append.append(tree.interval[1]-tree.interval[0])
-                this_tree_to_append.append(tree.newick())
-                tree_sequences.append(this_tree_to_append)
+        for tree in new_tree_sequence_obj.trees():
+            this_tree_to_append = []
+            this_tree_to_append.append(tree.interval[1]-tree.interval[0])
+            this_tree_to_append.append(tree.newick())
+            tree_sequences.append(this_tree_to_append)
 
 # Feedback.
 print(' done.')
 
-if only_alignments == 0:
+if exclude_c_genes == False:
 # Feedback.
     print('    Analyzing msprime output...', end='', flush=True)
     
@@ -889,22 +903,18 @@ if only_alignments == 0:
 
 # Simulate "gene tree" sequence alignments:
 # For now not compatible with the recombination map
-if args.alignment_genes != None:
+if n_alignments > 0:
     # Feedback.
     print('    Simulating gene sequence alignments for "gene tree" estimation...', end='', flush=True)
     DNA_alphabet = ['A','C','G','T']
-    gene_number = alignment_genes_number
-    gene_length = alignment_genes_length
     if rec_map != None:
-        #  here: mutation_rate == 2e-8
+       #  here: mutation_rate == 2e-8
+       print('Sorry, generating "gene tree" alignments with a custom recombination map is not implemented (yet)')
        new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=2e-8, recombination_map=msprime.RecombinationMap.read_hapmap(rec_map), random_seed=random.randint(1, 10000000))
     else:
-       if str(outfile.name).endswith('.html'):
-          f = str(outfile.name)[:-5] 
-       alignment_file = open(f+'_alignment.phy','w')
-       for i in range(0, gene_number):
+       for i in range(0, n_alignments):
            alignment = []
-           new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=mut_rate, length=gene_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
+           new_tree_sequence_obj = msprime.simulate(population_configurations=population_configurations, demographic_events=demographic_events, mutation_rate=mut_rate, length=alignment_length, recombination_rate=rec_rate, random_seed=random.randint(1, 10000000))
            for sp in range(0,len(species_ids)):
                alignment.append("")
            
@@ -933,16 +943,16 @@ if args.alignment_genes != None:
                        alignment[sp] =  alignment[sp] + ancestralDerivedDNA[variant.genotypes[sp]]
          
            # fill in invariable sites at the end of alignment
-           for bp in range(in_gene_position,gene_length):
+           for bp in range(in_gene_position,alignment_length):
                r = randint(0, 3)
                thisBase = DNA_alphabet[r]
                for sp in range(0,len(species_ids)):
                    alignment[sp] =  alignment[sp] + thisBase  
            
-           #print("gene_length: " + str(gene_length))
+           #print("alignment_length: " + str(alignment_length))
            #print("len(alignment[0]): " + str(len(alignment[0])))
            #print("len(alignment[1]): " + str(len(alignment[1])))
-           alignment_file.write(str(len(species_ids))+" "+str(gene_length)+"\n")
+           alignment_file.write(str(len(species_ids))+" "+str(alignment_length)+"\n")
            alignment_dict = {}
            for sp in range(0,len(species_ids)):
                 alignment_file.write(species_ids[sp]+'\t'+alignment[sp]+"\n")
@@ -956,965 +966,966 @@ if args.alignment_genes != None:
               print('.', end='', flush=True)
            
        alignment_file.close()
-       phymlCommand = 'phyml -i ' + os.path.basename(alignment_file.name) + '-n ' + str(gene_number) + '-b 0 -m JC69 -f e --no_memory_check --r_seed 100 --run_id phymlTest'
+       # phymlCommand = 'phyml -i ' + os.path.basename(alignment_file.name) + '-n ' + str(n_alignments) + '-b 0 -m JC69 -f e --no_memory_check --r_seed 100 --run_id phymlTest'
        #call(phymlCommand)
     
     
     # Feedback.
     print(' done.')
-    if only_alignments == 1:
-        sys.exit(0);
 
 
-# Feedback.
-print('    Preparing c-gene plots...', end='', flush=True)
+# Only prepare c-gene and topology-tract output if requested.
+if exclude_c_genes == False:
 
-# Determine the maximum c-gene size to plot in c-gene plot 1.
-c_gene_sizes_median = np.median(c_gene_sizes)
-if c_gene_sizes_median < 1:
-    c_gene_plot1_max_size = 5
-elif c_gene_sizes_median < 2:
-    c_gene_plot1_max_size = 10
-elif c_gene_sizes_median < 5:
-    c_gene_plot1_max_size = 20
-elif c_gene_sizes_median < 10:
-    c_gene_plot1_max_size = 50
-elif c_gene_sizes_median < 20:
-    c_gene_plot1_max_size = 100
-elif c_gene_sizes_median < 50:
-    c_gene_plot1_max_size = 200
-elif c_gene_sizes_median < 100:
-    c_gene_plot1_max_size = 500
-elif c_gene_sizes_median < 200:
-    c_gene_plot1_max_size = 1000
-elif c_gene_sizes_median < 500:
-    c_gene_plot1_max_size = 2000
-elif c_gene_sizes_median < 1000:
-    c_gene_plot1_max_size = 5000
-elif c_gene_sizes_median < 2000:
-    c_gene_plot1_max_size = 10000
-elif c_gene_sizes_median < 5000:
-    c_gene_plot1_max_size = 20000
-elif c_gene_sizes_median < 10000:
-    c_gene_plot1_max_size = 50000
-elif c_gene_sizes_median < 20000:
-    c_gene_plot1_max_size = 100000
-elif c_gene_sizes_median < 50000:
-    c_gene_plot1_max_size = 200000
-elif c_gene_sizes_median < 100000:
-    c_gene_plot1_max_size = 500000
-elif c_gene_sizes_median < 200000:
-    c_gene_plot1_max_size = 1000000
-elif c_gene_sizes_median < 500000:
-    c_gene_plot1_max_size = 2000000
-elif c_gene_sizes_median < 1000000:
-    c_gene_plot1_max_size = 5000000
-elif c_gene_sizes_median < 2000000:
-    c_gene_plot1_max_size = 10000000
-elif c_gene_sizes_median < 5000000:
-    c_gene_plot1_max_size = 20000000
-else:
-    c_gene_plot1_max_size = 50000000
+    # Feedback.
+    print('    Preparing c-gene plots...', end='', flush=True)
 
-# Determine the size values of bin centers.
-c_gene_plot1_bin_number = 25
-c_gene_plot1_bin_centers = []
-c_gene_plot1_bin_width = c_gene_plot1_max_size/float(c_gene_plot1_bin_number)
-for x in range(c_gene_plot1_bin_number):
-    c_gene_plot1_bin_centers.append((c_gene_plot1_bin_width/2.0)+(x*c_gene_plot1_bin_width))
+    # Determine the maximum c-gene size to plot in c-gene plot 1.
+    c_gene_sizes_median = np.median(c_gene_sizes)
+    if c_gene_sizes_median < 1:
+        c_gene_plot1_max_size = 5
+    elif c_gene_sizes_median < 2:
+        c_gene_plot1_max_size = 10
+    elif c_gene_sizes_median < 5:
+        c_gene_plot1_max_size = 20
+    elif c_gene_sizes_median < 10:
+        c_gene_plot1_max_size = 50
+    elif c_gene_sizes_median < 20:
+        c_gene_plot1_max_size = 100
+    elif c_gene_sizes_median < 50:
+        c_gene_plot1_max_size = 200
+    elif c_gene_sizes_median < 100:
+        c_gene_plot1_max_size = 500
+    elif c_gene_sizes_median < 200:
+        c_gene_plot1_max_size = 1000
+    elif c_gene_sizes_median < 500:
+        c_gene_plot1_max_size = 2000
+    elif c_gene_sizes_median < 1000:
+        c_gene_plot1_max_size = 5000
+    elif c_gene_sizes_median < 2000:
+        c_gene_plot1_max_size = 10000
+    elif c_gene_sizes_median < 5000:
+        c_gene_plot1_max_size = 20000
+    elif c_gene_sizes_median < 10000:
+        c_gene_plot1_max_size = 50000
+    elif c_gene_sizes_median < 20000:
+        c_gene_plot1_max_size = 100000
+    elif c_gene_sizes_median < 50000:
+        c_gene_plot1_max_size = 200000
+    elif c_gene_sizes_median < 100000:
+        c_gene_plot1_max_size = 500000
+    elif c_gene_sizes_median < 200000:
+        c_gene_plot1_max_size = 1000000
+    elif c_gene_sizes_median < 500000:
+        c_gene_plot1_max_size = 2000000
+    elif c_gene_sizes_median < 1000000:
+        c_gene_plot1_max_size = 5000000
+    elif c_gene_sizes_median < 2000000:
+        c_gene_plot1_max_size = 10000000
+    elif c_gene_sizes_median < 5000000:
+        c_gene_plot1_max_size = 20000000
+    else:
+        c_gene_plot1_max_size = 50000000
 
-# Fill the bins with counts of c-genes.
-c_gene_plot1_bin_counts = []
-for x in range(c_gene_plot1_bin_number):
-    c_gene_plot1_bin_counts.append(0)
-for s in c_gene_sizes:
+    # Determine the size values of bin centers.
+    c_gene_plot1_bin_number = 25
+    c_gene_plot1_bin_centers = []
+    c_gene_plot1_bin_width = c_gene_plot1_max_size/float(c_gene_plot1_bin_number)
     for x in range(c_gene_plot1_bin_number):
-        if s < c_gene_plot1_bin_centers[x]+(c_gene_plot1_bin_width/2.0) and s >= c_gene_plot1_bin_centers[x]-(c_gene_plot1_bin_width/2.0):
-            c_gene_plot1_bin_counts[x] += 1
-            break
+        c_gene_plot1_bin_centers.append((c_gene_plot1_bin_width/2.0)+(x*c_gene_plot1_bin_width))
 
-# Get the proportions of the genome covered by c-genes of a given size or larger.
-sorted_c_gene_sizes = sorted(c_gene_sizes)
-proportions_covered_by_c_genes = []
-smaller_c_gene_sizes_sum = 0
-for sorted_c_gene_size in sorted_c_gene_sizes:
-    smaller_c_gene_sizes_sum += sorted_c_gene_size
-    proportions_covered_by_c_genes.append((c_gene_sizes_sum-smaller_c_gene_sizes_sum)/c_gene_sizes_sum)
+    # Fill the bins with counts of c-genes.
+    c_gene_plot1_bin_counts = []
+    for x in range(c_gene_plot1_bin_number):
+        c_gene_plot1_bin_counts.append(0)
+    for s in c_gene_sizes:
+        for x in range(c_gene_plot1_bin_number):
+            if s < c_gene_plot1_bin_centers[x]+(c_gene_plot1_bin_width/2.0) and s >= c_gene_plot1_bin_centers[x]-(c_gene_plot1_bin_width/2.0):
+                c_gene_plot1_bin_counts[x] += 1
+                break
 
-# Determine the maximum c-gene count per bin to plot.
-if max(c_gene_plot1_bin_counts) < 10:
-    c_gene_plot1_max_count = 10
-elif max(c_gene_plot1_bin_counts) < 20:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/2))*2
-elif max(c_gene_plot1_bin_counts) < 50:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/5))*5
-elif max(c_gene_plot1_bin_counts) < 100:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/10))*10
-elif max(c_gene_plot1_bin_counts) < 200:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/20))*20
-elif max(c_gene_plot1_bin_counts) < 500:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/50))*50
-elif max(c_gene_plot1_bin_counts) < 1000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/100))*100
-elif max(c_gene_plot1_bin_counts) < 2000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/200))*200
-elif max(c_gene_plot1_bin_counts) < 5000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/500))*500
-elif max(c_gene_plot1_bin_counts) < 10000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/1000))*1000
-elif max(c_gene_plot1_bin_counts) < 20000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/2000))*2000
-elif max(c_gene_plot1_bin_counts) < 50000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/5000))*5000
-elif max(c_gene_plot1_bin_counts) < 100000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/10000))*10000
-elif max(c_gene_plot1_bin_counts) < 200000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/20000))*20000
-elif max(c_gene_plot1_bin_counts) < 500000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/50000))*50000
-elif max(c_gene_plot1_bin_counts) < 1000000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/100000))*100000
-elif max(c_gene_plot1_bin_counts) < 2000000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/200000))*200000
-elif max(c_gene_plot1_bin_counts) < 5000000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/500000))*500000
-elif max(c_gene_plot1_bin_counts) < 10000000:
-    c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/1000000))*1000000
-else:
-    c_gene_plot1_max_count = 20000000
+    # Get the proportions of the genome covered by c-genes of a given size or larger.
+    sorted_c_gene_sizes = sorted(c_gene_sizes)
+    proportions_covered_by_c_genes = []
+    smaller_c_gene_sizes_sum = 0
+    for sorted_c_gene_size in sorted_c_gene_sizes:
+        smaller_c_gene_sizes_sum += sorted_c_gene_size
+        proportions_covered_by_c_genes.append((c_gene_sizes_sum-smaller_c_gene_sizes_sum)/c_gene_sizes_sum)
 
-# Determine the number of c-genes not shown.
-n_c_genes_not_shown = 0
-for s in c_gene_sizes:
-    if s > c_gene_plot1_max_size:
-        n_c_genes_not_shown += 1
+    # Determine the maximum c-gene count per bin to plot.
+    if max(c_gene_plot1_bin_counts) < 10:
+        c_gene_plot1_max_count = 10
+    elif max(c_gene_plot1_bin_counts) < 20:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/2))*2
+    elif max(c_gene_plot1_bin_counts) < 50:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/5))*5
+    elif max(c_gene_plot1_bin_counts) < 100:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/10))*10
+    elif max(c_gene_plot1_bin_counts) < 200:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/20))*20
+    elif max(c_gene_plot1_bin_counts) < 500:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/50))*50
+    elif max(c_gene_plot1_bin_counts) < 1000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/100))*100
+    elif max(c_gene_plot1_bin_counts) < 2000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/200))*200
+    elif max(c_gene_plot1_bin_counts) < 5000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/500))*500
+    elif max(c_gene_plot1_bin_counts) < 10000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/1000))*1000
+    elif max(c_gene_plot1_bin_counts) < 20000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/2000))*2000
+    elif max(c_gene_plot1_bin_counts) < 50000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/5000))*5000
+    elif max(c_gene_plot1_bin_counts) < 100000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/10000))*10000
+    elif max(c_gene_plot1_bin_counts) < 200000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/20000))*20000
+    elif max(c_gene_plot1_bin_counts) < 500000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/50000))*50000
+    elif max(c_gene_plot1_bin_counts) < 1000000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/100000))*100000
+    elif max(c_gene_plot1_bin_counts) < 2000000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/200000))*200000
+    elif max(c_gene_plot1_bin_counts) < 5000000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/500000))*500000
+    elif max(c_gene_plot1_bin_counts) < 10000000:
+        c_gene_plot1_max_count = (np.ceil(max(c_gene_plot1_bin_counts)/1000000))*1000000
+    else:
+        c_gene_plot1_max_count = 20000000
 
-# Determine the values of ticks on the x axis.
-c_gene_plot1_size_ticks = [0]
-for x in range(10):
-    c_gene_plot1_size_ticks.append((x+1)*round((c_gene_plot1_max_size/10.0),1))
+    # Determine the number of c-genes not shown.
+    n_c_genes_not_shown = 0
+    for s in c_gene_sizes:
+        if s > c_gene_plot1_max_size:
+            n_c_genes_not_shown += 1
 
-# Determine the values of ticks on the y axis.
-c_gene_plot1_count_ticks = [0]
-c_gene_plot2_proportion_ticks = [0.0]
-for x in range(10):
-    c_gene_plot1_count_ticks.append((x+1)*round((c_gene_plot1_max_count/10.0),1))
-    c_gene_plot2_proportion_ticks.append(round(((x+1)/10.0),1))
+    # Determine the values of ticks on the x axis.
+    c_gene_plot1_size_ticks = [0]
+    for x in range(10):
+        c_gene_plot1_size_ticks.append((x+1)*round((c_gene_plot1_max_size/10.0),1))
 
-# General definitions for svg.
-corner_radius = 20
-stroke_shift_to_inside = 1
-plot_window_width = 840
-plot_window_height = 640
-plot_window_margin = 30
-plot_window_left_space = 95
-plot_tick_length = 5
-plot_window_right_space = 30
-plot_window_bottom_space = 40
-plot_dim_x = plot_window_width - 2*plot_window_margin - plot_window_left_space - plot_window_right_space
-plot_dim_y = plot_window_height - 2*plot_window_margin - plot_window_bottom_space
+    # Determine the values of ticks on the y axis.
+    c_gene_plot1_count_ticks = [0]
+    c_gene_plot2_proportion_ticks = [0.0]
+    for x in range(10):
+        c_gene_plot1_count_ticks.append((x+1)*round((c_gene_plot1_max_count/10.0),1))
+        c_gene_plot2_proportion_ticks.append(round(((x+1)/10.0),1))
 
-# Prepare to generate the svg elements for c-gene plot 1.
-c_gene_plot1_svg_lines = []
-c_gene_plot1_svg_rectangles = []
-c_gene_plot1_svg_texts = []
+    # General definitions for svg.
+    corner_radius = 20
+    stroke_shift_to_inside = 1
+    plot_window_width = 840
+    plot_window_height = 640
+    plot_window_margin = 30
+    plot_window_left_space = 95
+    plot_tick_length = 5
+    plot_window_right_space = 30
+    plot_window_bottom_space = 40
+    plot_dim_x = plot_window_width - 2*plot_window_margin - plot_window_left_space - plot_window_right_space
+    plot_dim_y = plot_window_height - 2*plot_window_margin - plot_window_bottom_space
 
-# Add the ticks.
-for i in c_gene_plot1_size_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot1_max_size))
-    x_end = x_start
+    # Prepare to generate the svg elements for c-gene plot 1.
+    c_gene_plot1_svg_lines = []
+    c_gene_plot1_svg_rectangles = []
+    c_gene_plot1_svg_texts = []
+
+    # Add the ticks.
+    for i in c_gene_plot1_size_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot1_max_size))
+        x_end = x_start
+        y_start = plot_window_margin + plot_dim_y
+        y_end = y_start + plot_tick_length
+        c_gene_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+    for i in c_gene_plot1_count_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space
+        x_end = x_start - plot_tick_length
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(c_gene_plot1_max_count))
+        y_end = y_start
+        c_gene_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+
+    # Add the text.
+    all_integer = True
+    for i in c_gene_plot1_size_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in c_gene_plot1_size_ticks:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot1_max_size))
+        y_start = plot_window_margin + plot_dim_y + 17
+        if all_integer:
+            c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
+        else:
+            c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
+    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
+    y_start = plot_window_margin + plot_dim_y + 45
+    c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'c-gene size (bp)'))
+    all_integer = True
+    for i in c_gene_plot1_count_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in c_gene_plot1_count_ticks:
+        x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(c_gene_plot1_max_count))
+        if all_integer:
+            c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
+        else:
+            c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
+    x_start = plot_window_margin
+    y_start = plot_window_margin + plot_dim_y * 0.5
+    c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start,y_start), 'Frequency'))
+
+    # Add the rectangles.
+    for x in range(len(c_gene_plot1_bin_centers)):
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * ((c_gene_plot1_bin_centers[x]-c_gene_plot1_bin_width/2.0)/float(c_gene_plot1_max_size))
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * (c_gene_plot1_bin_counts[x] / float(c_gene_plot1_max_count))
+        width = plot_dim_x/len(c_gene_plot1_bin_centers)
+        height = plot_dim_y * (c_gene_plot1_bin_counts[x] / float(c_gene_plot1_max_count))
+        c_gene_plot1_svg_rectangles.append(Rectangle(x_start, y_start, width, height, 'none', '#92a0a0', 1, 1))
+
+    # Add the path.
+    # Use an exponential distribution if a homogeneous recombination rate was used.
+    if rec_map == None:
+        exp_lambda = 1/np.mean(c_gene_sizes)
+        x_start = plot_window_margin + plot_window_left_space
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((exp_lambda * len(c_gene_sizes) * c_gene_plot1_bin_width) / float(c_gene_plot1_max_count))
+        c_gene_plot1_svg_path = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
+        for x in range(1000):
+            x_start = plot_window_margin + plot_window_left_space + ((x+1)/1000.0)*plot_dim_x
+            x_value_in_bp = ((x+1)/1000.0)*c_gene_plot1_max_size
+            y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((exp_lambda * len(c_gene_sizes) * c_gene_plot1_bin_width * np.exp(-exp_lambda * x_value_in_bp)) / float(c_gene_plot1_max_count))
+            c_gene_plot1_svg_path.add_point(x_start, y_start)
+
+    # Use a Weibull distribution if a recombination map was used.
+    else:
+        # Identify the parameters of a Weibull distribution so that the median and mean are according to the median and mean tract sizes.
+        c_gene_sizes_mean = np.mean(c_gene_sizes)
+        best_wb_lambda = None
+        best_wb_k = None
+        best_fit = 1000000000
+        step_size = 0.01
+        # XXX TODO: Implement a faster way to fit the two parameters.
+        # wb_lambda has to be at least as large as tract_sizes_median, otherwise wb_k would be negative.
+        wb_lambda = c_gene_sizes_median
+        optimum_found = False
+        for _ in range(200000):
+            wb_lambda += step_size
+            wb_k = np.log(np.log(2)) / np.log(c_gene_sizes_median/wb_lambda)
+            wb_mean = wb_lambda * special.gamma(1.0 + 1.0/wb_k)
+            fit = abs(wb_mean - c_gene_sizes_mean)
+            if fit < best_fit:
+                best_wb_lambda = wb_lambda
+                best_wb_k = wb_k
+                best_fit = fit
+        wb_k = best_wb_k
+        wb_lambda = best_wb_lambda
+        # Add the path.
+        if wb_k < 1:
+            wb_start = None
+        elif wb_k == 1:
+            wb_start = 1/wb_lambda
+        else:
+            wb_start = 0
+        if wb_start == None:
+            c_gene_plot1_svg_path = None
+        else:
+            x_start = plot_window_margin + plot_window_left_space
+            y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(c_gene_sizes) * c_gene_plot1_bin_width * wb_start) / float(c_gene_plot1_max_count))
+            c_gene_plot1_svg_path = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
+        for x in range(1000):
+            x_start = plot_window_margin + plot_window_left_space + ((x+1)/1000.0)*plot_dim_x
+            x_value_in_bp = ((x+1)/1000.0)*c_gene_plot1_max_size
+            wb_start = (wb_k/wb_lambda) * (x_value_in_bp/wb_lambda)**(wb_k-1) * np.exp(-(x_value_in_bp/wb_lambda)**wb_k)
+            y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(c_gene_sizes) * c_gene_plot1_bin_width * wb_start) / float(c_gene_plot1_max_count))
+            if c_gene_plot1_svg_path == None:
+                c_gene_plot1_svg_path = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
+            else:
+                c_gene_plot1_svg_path.add_point(x_start, y_start)
+
+    # Add the figure legend.
+    x_start = plot_window_margin + plot_window_left_space + plot_dim_x - 10
+    y_start = plot_window_margin + 10
+    if rec_map == None:
+        c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#32aace', 'end', 'top', None, 'Fitted exponential distribution (&lambda; = {})'.format(round(exp_lambda,5))))
+    else:
+        c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#32aace', 'end', 'top', None, 'Fitted Weibull distribution (&lambda; = {}, k = {})'.format(round(wb_lambda,3), round(wb_k,3))))
+    y_start += 20
+    c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#92a0a0', 'end', 'top', None, '{} c-genes longer than {} bp not shown'.format(n_c_genes_not_shown, c_gene_plot1_max_size)))
+
+    # Insert the svg elements into c-gene plot 1.
+    c_gene_plot1_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
+    c_gene_plot1_svg_string += '            <defs>\n'
+    c_gene_plot1_svg_string += '              <radialGradient id=\"rad_grad1\" cx=\"50%\" cy=\"50%\" r=\"50%\" fx=\"50%\" fy=\"50%\">\n'
+    c_gene_plot1_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
+    c_gene_plot1_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
+    c_gene_plot1_svg_string += '              </radialGradient>\n'
+    c_gene_plot1_svg_string += '              <clipPath id=\"cut1\">\n'
+    c_gene_plot1_svg_string += '                <rect x=\"{0}\" y=\"{1}\" width=\"{2}\" height=\"{2}\" />\n'.format(plot_window_margin+plot_window_left_space, plot_window_margin, plot_dim_y)
+    c_gene_plot1_svg_string += '              </clipPath>\n'
+    c_gene_plot1_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
+    c_gene_plot1_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
+    c_gene_plot1_svg_string += '              <marker>\n'
+    c_gene_plot1_svg_string += '            </defs>\n'
+    c_gene_plot1_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
+    c_gene_plot1_svg_string += '            <rect x=\"{0}\" y=\"0\" width=\"{1}\" height=\"{1}\" fill=\"url(#rad_grad1)\" clip-path=\"url(#cut1)\" fill-opacity=\"0.5\" />\n'.format(plot_window_margin+plot_window_left_space-plot_dim_y, 2*plot_dim_y)
+    for r in c_gene_plot1_svg_rectangles:
+        c_gene_plot1_svg_string += '            {}\n'.format(r.to_svg())
+    for l in c_gene_plot1_svg_lines:
+        c_gene_plot1_svg_string += '            {}\n'.format(l.to_svg())
+    for t in c_gene_plot1_svg_texts:
+        c_gene_plot1_svg_string += '            {}\n'.format(t.to_svg())
+    x_start = plot_window_margin + plot_window_left_space
+    x_end = x_start + plot_dim_x
     y_start = plot_window_margin + plot_dim_y
-    y_end = y_start + plot_tick_length
-    c_gene_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-for i in c_gene_plot1_count_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space
-    x_end = x_start - plot_tick_length
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(c_gene_plot1_max_count))
     y_end = y_start
-    c_gene_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-
-# Add the text.
-all_integer = True
-for i in c_gene_plot1_size_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in c_gene_plot1_size_ticks:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot1_max_size))
-    y_start = plot_window_margin + plot_dim_y + 17
-    if all_integer:
-        c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
-    else:
-        c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
-x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
-y_start = plot_window_margin + plot_dim_y + 45
-c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'c-gene size (bp)'))
-all_integer = True
-for i in c_gene_plot1_count_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in c_gene_plot1_count_ticks:
-    x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(c_gene_plot1_max_count))
-    if all_integer:
-        c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
-    else:
-        c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
-x_start = plot_window_margin
-y_start = plot_window_margin + plot_dim_y * 0.5
-c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start,y_start), 'Frequency'))
-
-# Add the rectangles.
-for x in range(len(c_gene_plot1_bin_centers)):
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * ((c_gene_plot1_bin_centers[x]-c_gene_plot1_bin_width/2.0)/float(c_gene_plot1_max_size))
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * (c_gene_plot1_bin_counts[x] / float(c_gene_plot1_max_count))
-    width = plot_dim_x/len(c_gene_plot1_bin_centers)
-    height = plot_dim_y * (c_gene_plot1_bin_counts[x] / float(c_gene_plot1_max_count))
-    c_gene_plot1_svg_rectangles.append(Rectangle(x_start, y_start, width, height, 'none', '#92a0a0', 1, 1))
-
-# Add the path.
-# Use an exponential distribution if a homogeneous recombination rate was used.
-if rec_map == None:
-    exp_lambda = 1/np.mean(c_gene_sizes)
+    c_gene_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
     x_start = plot_window_margin + plot_window_left_space
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((exp_lambda * len(c_gene_sizes) * c_gene_plot1_bin_width) / float(c_gene_plot1_max_count))
-    c_gene_plot1_svg_path = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
-    for x in range(1000):
-        x_start = plot_window_margin + plot_window_left_space + ((x+1)/1000.0)*plot_dim_x
-        x_value_in_bp = ((x+1)/1000.0)*c_gene_plot1_max_size
-        y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((exp_lambda * len(c_gene_sizes) * c_gene_plot1_bin_width * np.exp(-exp_lambda * x_value_in_bp)) / float(c_gene_plot1_max_count))
-        c_gene_plot1_svg_path.add_point(x_start, y_start)
+    x_end = x_start
+    y_end = plot_window_margin
+    y_start = y_end + plot_dim_y
+    c_gene_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    c_gene_plot1_svg_string += '            {}\n'.format(c_gene_plot1_svg_path.to_svg())
+    c_gene_plot1_svg_string += '          </svg>\n'
 
-# Use a Weibull distribution if a recombination map was used.
-else:
+    # Determine the threshold c-gene size to plot in c-gene plot 2.
+    threshold = 0.1
+    for x in range(1,len(proportions_covered_by_c_genes)):
+        if proportions_covered_by_c_genes[x-1] > threshold and proportions_covered_by_c_genes[x] <= threshold:
+            c_gene_threshold_size = sorted_c_gene_sizes[x]
+
+    # Determine the maximum c-gene size to plot in c-gene plot 2.
+    for x in [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]:
+        for y in range(1,10):
+            if c_gene_threshold_size < x*y:
+                c_gene_plot2_max_size = x*y
+                break
+        else:
+            continue
+        break
+
+    # Determine the values of ticks on the x axis.
+    c_gene_plot2_size_ticks = [0]
+    for x in range(10):
+        c_gene_plot2_size_ticks.append((x+1)*round((c_gene_plot2_max_size/10.0),1))
+
+    # Prepare to generate the svg elements for c-gene plot 2.
+    c_gene_plot2_svg_lines = []
+    c_gene_plot2_svg_rectangles = []
+    c_gene_plot2_svg_texts = []
+
+    # Add the ticks.
+    for i in c_gene_plot2_size_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot2_max_size))
+        x_end = x_start
+        y_start = plot_window_margin + plot_dim_y
+        y_end = y_start + plot_tick_length
+        c_gene_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+
+    for i in c_gene_plot2_proportion_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space
+        x_end = x_start - plot_tick_length
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
+        y_end = y_start
+        c_gene_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+
+    # Add the text.
+    all_integer = True
+    for i in c_gene_plot2_size_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in c_gene_plot2_size_ticks:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot2_max_size))
+        y_start = plot_window_margin + plot_dim_y + 17
+        if all_integer:
+            c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
+        else:
+            c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
+    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
+    y_start = plot_window_margin + plot_dim_y + 45
+    c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'c-gene size (bp)'))
+    all_integer = True
+    for i in c_gene_plot2_proportion_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in c_gene_plot2_proportion_ticks:
+        x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
+        if all_integer:
+            c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
+        else:
+            c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
+    x_start = plot_window_margin
+    y_start = plot_window_margin + plot_dim_y * 0.5
+    c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start, y_start), 'Proportion of genome covered by c-genes of at least this size'))
+
+    # Add the path.
+    x_start = plot_window_margin + plot_window_left_space
+    y_start = plot_window_margin
+    c_gene_plot2_svg_path_stroke = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
+    c_gene_plot2_svg_path_fill = Path(x_start, y_start, '#ede7d4', 'none', 0, 1, True)
+    y_old = y_start
+    x_old = x_start
+    all_c_genes_smaller_than_threshold = True
+    for z in range(len(sorted_c_gene_sizes)):
+        if sorted_c_gene_sizes[z] < c_gene_plot2_max_size:
+            x_new = plot_window_margin + plot_window_left_space + (sorted_c_gene_sizes[z]/c_gene_plot2_max_size) * plot_dim_x
+            if x_new > x_old + 1:
+                y_new = plot_window_margin + plot_dim_y - plot_dim_y * proportions_covered_by_c_genes[z]
+                c_gene_plot2_svg_path_stroke.add_point(x_new, y_old)
+                c_gene_plot2_svg_path_fill.add_point(x_new, y_old)
+                c_gene_plot2_svg_path_stroke.add_point(x_new, y_new)
+                c_gene_plot2_svg_path_fill.add_point(x_new, y_new)
+                y_old = y_new
+                x_old = x_new
+        else:
+            all_c_genes_smaller_than_threshold = False
+    if all_c_genes_smaller_than_threshold == False:
+        x = plot_window_margin + plot_window_left_space + plot_dim_x
+        y = y_old
+        c_gene_plot2_svg_path_stroke.add_point(x, y)
+        c_gene_plot2_svg_path_fill.add_point(x, y)
+        y = plot_window_margin + plot_dim_y
+        c_gene_plot2_svg_path_fill.add_point(x, y)
+    x = plot_window_margin + plot_window_left_space
+    y = plot_window_margin + plot_dim_y
+    c_gene_plot2_svg_path_fill.add_point(x, y)
+
+    # Insert the svg elements into c-gene plot 2.
+    c_gene_plot2_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
+    c_gene_plot2_svg_string += '            <defs>\n'
+    c_gene_plot2_svg_string += '              <linearGradient id="lin_grad1" x1="0%" y1="0%" x2="100%" y2="0%">\n'
+    c_gene_plot2_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
+    c_gene_plot2_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
+    c_gene_plot2_svg_string += '              </linearGradient>\n'
+    c_gene_plot2_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
+    c_gene_plot2_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
+    c_gene_plot2_svg_string += '              <marker>\n'
+    c_gene_plot2_svg_string += '            </defs>\n'
+    c_gene_plot2_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
+    c_gene_plot2_svg_path_fill_svg = c_gene_plot2_svg_path_fill.to_svg().replace('fill=\"#ede7d4\"','fill=\"url(#lin_grad1)\"')
+    c_gene_plot2_svg_string += '            {}\n'.format(c_gene_plot2_svg_path_fill_svg)
+    for l in c_gene_plot2_svg_lines:
+        c_gene_plot2_svg_string += '            {}\n'.format(l.to_svg())
+    for t in c_gene_plot2_svg_texts:
+        c_gene_plot2_svg_string += '            {}\n'.format(t.to_svg())
+    x_start = plot_window_margin + plot_window_left_space
+    x_end = x_start + plot_dim_x
+    y_start = plot_window_margin + plot_dim_y
+    y_end = y_start
+    c_gene_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    x_start = plot_window_margin + plot_window_left_space
+    x_end = x_start
+    y_end = plot_window_margin
+    y_start = y_end + plot_dim_y
+    c_gene_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    c_gene_plot2_svg_string += '            {}\n'.format(c_gene_plot2_svg_path_stroke.to_svg())
+    c_gene_plot2_svg_string += '          </svg>\n'
+
+    # Feedback.
+    print(' done.')
+
+    # Feedback.
+    print('    Preparing single-topology tract plots...', end='', flush=True)
+
+    # Determine the maximum single-topology tract size to plot in tract plot 1.
+    tract_sizes_median = np.median(tract_sizes)
+    if tract_sizes_median < 1:
+        tract_plot1_max_size = 5
+    elif tract_sizes_median < 2:
+        tract_plot1_max_size = 10
+    elif tract_sizes_median < 5:
+        tract_plot1_max_size = 20
+    elif tract_sizes_median < 10:
+        tract_plot1_max_size = 50
+    elif tract_sizes_median < 20:
+        tract_plot1_max_size = 100
+    elif tract_sizes_median < 50:
+        tract_plot1_max_size = 200
+    elif tract_sizes_median < 100:
+        tract_plot1_max_size = 500
+    elif tract_sizes_median < 200:
+        tract_plot1_max_size = 1000
+    elif tract_sizes_median < 500:
+        tract_plot1_max_size = 2000
+    elif tract_sizes_median < 1000:
+        tract_plot1_max_size = 5000
+    elif tract_sizes_median < 2000:
+        tract_plot1_max_size = 10000
+    elif tract_sizes_median < 5000:
+        tract_plot1_max_size = 20000
+    elif tract_sizes_median < 10000:
+        tract_plot1_max_size = 50000
+    elif tract_sizes_median < 20000:
+        tract_plot1_max_size = 100000
+    elif tract_sizes_median < 50000:
+        tract_plot1_max_size = 200000
+    elif tract_sizes_median < 100000:
+        tract_plot1_max_size = 500000
+    elif tract_sizes_median < 200000:
+        tract_plot1_max_size = 1000000
+    elif tract_sizes_median < 500000:
+        tract_plot1_max_size = 2000000
+    elif tract_sizes_median < 1000000:
+        tract_plot1_max_size = 5000000
+    elif tract_sizes_median < 2000000:
+        tract_plot1_max_size = 10000000
+    elif tract_sizes_median < 5000000:
+        tract_plot1_max_size = 20000000
+    else:
+        tract_plot1_max_size = 50000000
+
+    # Determine the size values of bin centers.
+    tract_plot1_bin_number = 25
+    tract_plot1_bin_centers = []
+    tract_plot1_bin_width = tract_plot1_max_size/float(tract_plot1_bin_number)
+    for x in range(tract_plot1_bin_number):
+        tract_plot1_bin_centers.append((tract_plot1_bin_width/2.0)+(x*tract_plot1_bin_width))
+
+    # Fill the bins with counts of tracts.
+    tract_plot1_bin_counts = []
+    for x in range(tract_plot1_bin_number):
+        tract_plot1_bin_counts.append(0)
+    for s in tract_sizes:
+        for x in range(tract_plot1_bin_number):
+            if s < tract_plot1_bin_centers[x]+(tract_plot1_bin_width/2.0) and s >= tract_plot1_bin_centers[x]-(tract_plot1_bin_width/2.0):
+                tract_plot1_bin_counts[x] += 1
+                break
+
+    # Get the proportions of the genome covered by tracts of a given size or larger.
+    sorted_tract_sizes = sorted(tract_sizes)
+    proportions_covered_by_tracts = []
+    smaller_tract_sizes_sum = 0
+    for sorted_tract_size in sorted_tract_sizes:
+        smaller_tract_sizes_sum += sorted_tract_size
+        proportions_covered_by_tracts.append((tract_sizes_sum-smaller_tract_sizes_sum)/tract_sizes_sum)
+
+    # Determine the maximum tract count per bin to plot.
+    if max(tract_plot1_bin_counts) < 10:
+        tract_plot1_max_count = 10
+    elif max(tract_plot1_bin_counts) < 20:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/2))*2
+    elif max(tract_plot1_bin_counts) < 50:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/5))*5
+    elif max(tract_plot1_bin_counts) < 100:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/10))*10
+    elif max(tract_plot1_bin_counts) < 200:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/20))*20
+    elif max(tract_plot1_bin_counts) < 500:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/50))*50
+    elif max(tract_plot1_bin_counts) < 1000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/100))*100
+    elif max(tract_plot1_bin_counts) < 2000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/200))*200
+    elif max(tract_plot1_bin_counts) < 5000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/500))*500
+    elif max(tract_plot1_bin_counts) < 10000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/1000))*1000
+    elif max(tract_plot1_bin_counts) < 20000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/2000))*2000
+    elif max(tract_plot1_bin_counts) < 50000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/5000))*5000
+    elif max(tract_plot1_bin_counts) < 100000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/10000))*10000
+    elif max(tract_plot1_bin_counts) < 200000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/20000))*20000
+    elif max(tract_plot1_bin_counts) < 500000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/50000))*50000
+    elif max(tract_plot1_bin_counts) < 1000000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/100000))*100000
+    elif max(tract_plot1_bin_counts) < 2000000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/200000))*200000
+    elif max(tract_plot1_bin_counts) < 5000000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/500000))*500000
+    elif max(tract_plot1_bin_counts) < 10000000:
+        tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/1000000))*1000000
+    else:
+        tract_plot1_max_count = 20000000
+
+    # Determine the number of tracts not shown.
+    n_tracts_not_shown = 0
+    for s in tract_sizes:
+        if s > tract_plot1_max_size:
+            n_tracts_not_shown += 1
+
+    # Determine the values of ticks on the x axis.
+    tract_plot1_size_ticks = [0]
+    for x in range(10):
+        tract_plot1_size_ticks.append((x+1)*round((tract_plot1_max_size/10.0),1))
+
+    # Determine the values of ticks on the y axis.
+    tract_plot1_count_ticks = [0]
+    tract_plot2_proportion_ticks = [0.0]
+    for x in range(10):
+        tract_plot1_count_ticks.append((x+1)*round((tract_plot1_max_count/10.0),1))
+        tract_plot2_proportion_ticks.append(round(((x+1)/10.0),1))
+
+    # Prepare to generate the svg elements for tract plot 1.
+    tract_plot1_svg_lines = []
+    tract_plot1_svg_rectangles = []
+    tract_plot1_svg_texts = []
+
+    # Add the ticks.
+    for i in tract_plot1_size_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot1_max_size))
+        x_end = x_start
+        y_start = plot_window_margin + plot_dim_y
+        y_end = y_start + plot_tick_length
+        tract_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+
+    for i in tract_plot1_count_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space
+        x_end = x_start - plot_tick_length
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(tract_plot1_max_count))
+        y_end = y_start
+        tract_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+
+    # Add the text.
+    all_integer = True
+    for i in tract_plot1_size_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in tract_plot1_size_ticks:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot1_max_size))
+        y_start = plot_window_margin + plot_dim_y + 17
+        if all_integer:
+            tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
+        else:
+            tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
+    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
+    y_start = plot_window_margin + plot_dim_y + 45
+    tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'Single-topology tract size (bp)'))
+    all_integer = True
+    for i in tract_plot1_count_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in tract_plot1_count_ticks:
+        x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(tract_plot1_max_count))
+        if all_integer:
+            tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
+        else:
+            tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
+    x_start = plot_window_margin
+    y_start = plot_window_margin + plot_dim_y * 0.5
+    tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start, y_start), 'Frequency'))
+
+    # Add the rectangles.
+    for x in range(len(tract_plot1_bin_centers)):
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * ((tract_plot1_bin_centers[x]-tract_plot1_bin_width/2.0)/float(tract_plot1_max_size))
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * (tract_plot1_bin_counts[x] / float(tract_plot1_max_count))
+        width = plot_dim_x/len(tract_plot1_bin_centers)
+        height = plot_dim_y * (tract_plot1_bin_counts[x] / float(tract_plot1_max_count))
+        tract_plot1_svg_rectangles.append(Rectangle(x_start, y_start, width, height, 'none', '#92a0a0', 1, 1))
+
     # Identify the parameters of a Weibull distribution so that the median and mean are according to the median and mean tract sizes.
-    c_gene_sizes_mean = np.mean(c_gene_sizes)
+    tract_sizes_mean = np.mean(tract_sizes)
     best_wb_lambda = None
     best_wb_k = None
     best_fit = 1000000000
     step_size = 0.01
     # XXX TODO: Implement a faster way to fit the two parameters.
     # wb_lambda has to be at least as large as tract_sizes_median, otherwise wb_k would be negative.
-    wb_lambda = c_gene_sizes_median
+    wb_lambda = tract_sizes_median
     optimum_found = False
     for _ in range(200000):
         wb_lambda += step_size
-        wb_k = np.log(np.log(2)) / np.log(c_gene_sizes_median/wb_lambda)
+        wb_k = np.log(np.log(2)) / np.log(tract_sizes_median/wb_lambda)
         wb_mean = wb_lambda * special.gamma(1.0 + 1.0/wb_k)
-        fit = abs(wb_mean - c_gene_sizes_mean)
+        fit = abs(wb_mean - tract_sizes_mean)
         if fit < best_fit:
             best_wb_lambda = wb_lambda
             best_wb_k = wb_k
             best_fit = fit
     wb_k = best_wb_k
     wb_lambda = best_wb_lambda
-    # Add the path.
-    if wb_k < 1:
+    if wb_k == None:
+        wb_start = None
+    elif wb_k < 1:
         wb_start = None
     elif wb_k == 1:
         wb_start = 1/wb_lambda
     else:
         wb_start = 0
     if wb_start == None:
-        c_gene_plot1_svg_path = None
+        tract_plot1_svg_path = None
     else:
         x_start = plot_window_margin + plot_window_left_space
-        y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(c_gene_sizes) * c_gene_plot1_bin_width * wb_start) / float(c_gene_plot1_max_count))
-        c_gene_plot1_svg_path = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(tract_sizes) * tract_plot1_bin_width * wb_start) / float(tract_plot1_max_count))
+        tract_plot1_svg_path = Path(x_start, y_start, 'none', '#f5902f', 5, 1, False)
     for x in range(1000):
         x_start = plot_window_margin + plot_window_left_space + ((x+1)/1000.0)*plot_dim_x
-        x_value_in_bp = ((x+1)/1000.0)*c_gene_plot1_max_size
+        x_value_in_bp = ((x+1)/1000.0)*tract_plot1_max_size
         wb_start = (wb_k/wb_lambda) * (x_value_in_bp/wb_lambda)**(wb_k-1) * np.exp(-(x_value_in_bp/wb_lambda)**wb_k)
-        y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(c_gene_sizes) * c_gene_plot1_bin_width * wb_start) / float(c_gene_plot1_max_count))
-        if c_gene_plot1_svg_path == None:
-            c_gene_plot1_svg_path = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(tract_sizes) * tract_plot1_bin_width * wb_start) / float(tract_plot1_max_count))
+        if tract_plot1_svg_path == None:
+            tract_plot1_svg_path = Path(x_start, y_start, 'none', '#f5902f', 5, 1, False)
         else:
-            c_gene_plot1_svg_path.add_point(x_start, y_start)
+            tract_plot1_svg_path.add_point(x_start, y_start)
 
-# Add the figure legend.
-x_start = plot_window_margin + plot_window_left_space + plot_dim_x - 10
-y_start = plot_window_margin + 10
-if rec_map == None:
-    c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#32aace', 'end', 'top', None, 'Fitted exponential distribution (&lambda; = {})'.format(round(exp_lambda,5))))
-else:
-    c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#32aace', 'end', 'top', None, 'Fitted Weibull distribution (&lambda; = {}, k = {})'.format(round(wb_lambda,3), round(wb_k,3))))
-y_start += 20
-c_gene_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#92a0a0', 'end', 'top', None, '{} c-genes longer than {} bp not shown'.format(n_c_genes_not_shown, c_gene_plot1_max_size)))
+    # Add the figure legend.
+    x_start = plot_window_margin + plot_window_left_space + plot_dim_x - 10
+    y_start = plot_window_margin + 10
+    tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#f5902f', 'end', 'top', None, 'Fitted Weibull distribution (&lambda; = {}, k = {})'.format(round(wb_lambda,3), round(wb_k,3))))
+    y_start += 20
+    tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#92a0a0', 'end', 'top', None, '{} tracts longer than {} bp not shown'.format(n_tracts_not_shown, tract_plot1_max_size)))
 
-# Insert the svg elements into c-gene plot 1.
-c_gene_plot1_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
-c_gene_plot1_svg_string += '            <defs>\n'
-c_gene_plot1_svg_string += '              <radialGradient id=\"rad_grad1\" cx=\"50%\" cy=\"50%\" r=\"50%\" fx=\"50%\" fy=\"50%\">\n'
-c_gene_plot1_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
-c_gene_plot1_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
-c_gene_plot1_svg_string += '              </radialGradient>\n'
-c_gene_plot1_svg_string += '              <clipPath id=\"cut1\">\n'
-c_gene_plot1_svg_string += '                <rect x=\"{0}\" y=\"{1}\" width=\"{2}\" height=\"{2}\" />\n'.format(plot_window_margin+plot_window_left_space, plot_window_margin, plot_dim_y)
-c_gene_plot1_svg_string += '              </clipPath>\n'
-c_gene_plot1_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
-c_gene_plot1_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
-c_gene_plot1_svg_string += '              <marker>\n'
-c_gene_plot1_svg_string += '            </defs>\n'
-c_gene_plot1_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
-c_gene_plot1_svg_string += '            <rect x=\"{0}\" y=\"0\" width=\"{1}\" height=\"{1}\" fill=\"url(#rad_grad1)\" clip-path=\"url(#cut1)\" fill-opacity=\"0.5\" />\n'.format(plot_window_margin+plot_window_left_space-plot_dim_y, 2*plot_dim_y)
-for r in c_gene_plot1_svg_rectangles:
-    c_gene_plot1_svg_string += '            {}\n'.format(r.to_svg())
-for l in c_gene_plot1_svg_lines:
-    c_gene_plot1_svg_string += '            {}\n'.format(l.to_svg())
-for t in c_gene_plot1_svg_texts:
-    c_gene_plot1_svg_string += '            {}\n'.format(t.to_svg())
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start + plot_dim_x
-y_start = plot_window_margin + plot_dim_y
-y_end = y_start
-c_gene_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start
-y_end = plot_window_margin
-y_start = y_end + plot_dim_y
-c_gene_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-c_gene_plot1_svg_string += '            {}\n'.format(c_gene_plot1_svg_path.to_svg())
-c_gene_plot1_svg_string += '          </svg>\n'
-
-# Determine the threshold c-gene size to plot in c-gene plot 2.
-threshold = 0.1
-for x in range(1,len(proportions_covered_by_c_genes)):
-    if proportions_covered_by_c_genes[x-1] > threshold and proportions_covered_by_c_genes[x] <= threshold:
-        c_gene_threshold_size = sorted_c_gene_sizes[x]
-
-# Determine the maximum c-gene size to plot in c-gene plot 2.
-for x in [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]:
-    for y in range(1,10):
-        if c_gene_threshold_size < x*y:
-            c_gene_plot2_max_size = x*y
-            break
-    else:
-        continue
-    break
-
-# Determine the values of ticks on the x axis.
-c_gene_plot2_size_ticks = [0]
-for x in range(10):
-    c_gene_plot2_size_ticks.append((x+1)*round((c_gene_plot2_max_size/10.0),1))
-
-# Prepare to generate the svg elements for c-gene plot 2.
-c_gene_plot2_svg_lines = []
-c_gene_plot2_svg_rectangles = []
-c_gene_plot2_svg_texts = []
-
-# Add the ticks.
-for i in c_gene_plot2_size_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot2_max_size))
-    x_end = x_start
-    y_start = plot_window_margin + plot_dim_y
-    y_end = y_start + plot_tick_length
-    c_gene_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-
-for i in c_gene_plot2_proportion_ticks[:-1]:
+    # Insert the svg elements into tract plot 1.
+    tract_plot1_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
+    tract_plot1_svg_string += '            <defs>\n'
+    tract_plot1_svg_string += '              <radialGradient id=\"rad_grad2\" cx=\"50%\" cy=\"50%\" r=\"50%\" fx=\"50%\" fy=\"50%\">\n'
+    tract_plot1_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
+    tract_plot1_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
+    tract_plot1_svg_string += '              </radialGradient>\n'
+    tract_plot1_svg_string += '              <clipPath id=\"cut2\">\n'
+    tract_plot1_svg_string += '                <rect x=\"{0}\" y=\"{1}\" width=\"{2}\" height=\"{2}\" />\n'.format(plot_window_margin+plot_window_left_space, plot_window_margin, plot_dim_y)
+    tract_plot1_svg_string += '              </clipPath>\n'
+    tract_plot1_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
+    tract_plot1_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
+    tract_plot1_svg_string += '              <marker>\n'
+    tract_plot1_svg_string += '            </defs>\n'
+    tract_plot1_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
+    tract_plot1_svg_string += '            <rect x=\"{0}\" y=\"0\" width=\"{1}\" height=\"{1}\" fill=\"url(#rad_grad2)\" clip-path=\"url(#cut2)\" fill-opacity=\"0.5\" />\n'.format(plot_window_margin+plot_window_left_space-plot_dim_y, 2*plot_dim_y)
+    for r in tract_plot1_svg_rectangles:
+        tract_plot1_svg_string += '            {}\n'.format(r.to_svg())
+    for l in tract_plot1_svg_lines:
+        tract_plot1_svg_string += '            {}\n'.format(l.to_svg())
+    for t in tract_plot1_svg_texts:
+        tract_plot1_svg_string += '            {}\n'.format(t.to_svg())
     x_start = plot_window_margin + plot_window_left_space
-    x_end = x_start - plot_tick_length
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
+    x_end = x_start + plot_dim_x
+    y_start = plot_window_margin + plot_dim_y
     y_end = y_start
-    c_gene_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+    tract_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    x_start = plot_window_margin + plot_window_left_space
+    x_end = x_start
+    y_end = plot_window_margin
+    y_start = y_end + plot_dim_y
+    tract_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    tract_plot1_svg_string += '            {}\n'.format(tract_plot1_svg_path.to_svg())
+    tract_plot1_svg_string += '          </svg>\n'
 
-# Add the text.
-all_integer = True
-for i in c_gene_plot2_size_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in c_gene_plot2_size_ticks:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(c_gene_plot2_max_size))
-    y_start = plot_window_margin + plot_dim_y + 17
-    if all_integer:
-        c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
-    else:
-        c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
-x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
-y_start = plot_window_margin + plot_dim_y + 45
-c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'c-gene size (bp)'))
-all_integer = True
-for i in c_gene_plot2_proportion_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in c_gene_plot2_proportion_ticks:
-    x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
-    if all_integer:
-        c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
-    else:
-        c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
-x_start = plot_window_margin
-y_start = plot_window_margin + plot_dim_y * 0.5
-c_gene_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start, y_start), 'Proportion of genome covered by c-genes of at least this size'))
+    # Determine the threshold tract size to plot in tract plot 2.
+    threshold = 0.1
+    for x in range(1,len(proportions_covered_by_tracts)):
+        if proportions_covered_by_tracts[x-1] > threshold and proportions_covered_by_tracts[x] <= threshold:
+            tract_threshold_size = sorted_tract_sizes[x]
 
-# Add the path.
-x_start = plot_window_margin + plot_window_left_space
-y_start = plot_window_margin
-c_gene_plot2_svg_path_stroke = Path(x_start, y_start, 'none', '#32aace', 5, 1, False)
-c_gene_plot2_svg_path_fill = Path(x_start, y_start, '#ede7d4', 'none', 0, 1, True)
-y_old = y_start
-x_old = x_start
-all_c_genes_smaller_than_threshold = True
-for z in range(len(sorted_c_gene_sizes)):
-    if sorted_c_gene_sizes[z] < c_gene_plot2_max_size:
-        x_new = plot_window_margin + plot_window_left_space + (sorted_c_gene_sizes[z]/c_gene_plot2_max_size) * plot_dim_x
-        if x_new > x_old + 1:
-            y_new = plot_window_margin + plot_dim_y - plot_dim_y * proportions_covered_by_c_genes[z]
-            c_gene_plot2_svg_path_stroke.add_point(x_new, y_old)
-            c_gene_plot2_svg_path_fill.add_point(x_new, y_old)
-            c_gene_plot2_svg_path_stroke.add_point(x_new, y_new)
-            c_gene_plot2_svg_path_fill.add_point(x_new, y_new)
+    # Determine the maximum tract size to plot in tract plot 2.
+    for x in [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]:
+        for y in range(1,10):
+            if tract_threshold_size < x*y:
+                tract_plot2_max_size = x*y
+                break
+        else:
+            continue
+        break
+
+    # Determine the values of ticks on the x axis.
+    tract_plot2_size_ticks = [0]
+    for x in range(10):
+        tract_plot2_size_ticks.append((x+1)*round((tract_plot2_max_size/10.0),1))
+
+    # Prepare to generate the svg elements for tract plot 2.
+    tract_plot2_svg_lines = []
+    tract_plot2_svg_rectangles = []
+    tract_plot2_svg_texts = []
+
+    # Add the ticks.
+    for i in tract_plot2_size_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot2_max_size))
+        x_end = x_start
+        y_start = plot_window_margin + plot_dim_y
+        y_end = y_start + plot_tick_length
+        tract_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+    for i in tract_plot2_proportion_ticks[:-1]:
+        x_start = plot_window_margin + plot_window_left_space
+        x_end = x_start - plot_tick_length
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
+        y_end = y_start
+        tract_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
+
+    # Add the text.
+    all_integer = True
+    for i in tract_plot2_size_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in tract_plot2_size_ticks:
+        x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot2_max_size))
+        y_start = plot_window_margin + plot_dim_y + 17
+        if all_integer:
+            tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
+        else:
+            tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
+    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
+    y_start = plot_window_margin + plot_dim_y + 45
+    tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'Single-topology tract size (bp)'))
+    all_integer = True
+    for i in tract_plot2_proportion_ticks:
+        if round(i) != round(i,1):
+            all_integer = False
+    for i in tract_plot2_proportion_ticks:
+        x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
+        y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
+        if all_integer:
+            tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
+        else:
+            tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
+    x_start = plot_window_margin
+    y_start = plot_window_margin + plot_dim_y * 0.5
+    tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start, y_start), 'Proportion of genome covered by single-topology tracts of at least this size'))
+
+    # Add the path.
+    x_start = plot_window_margin + plot_window_left_space
+    y_start = plot_window_margin
+    tract_plot2_svg_path_stroke = Path(x_start, y_start, 'none', '#f5902f', 5, 1, False)
+    tract_plot2_svg_path_fill = Path(x_start, y_start, '#ede7d4', 'none', 0, 1, True)
+    y_old = y_start
+    all_tracts_smaller_than_threshold = True
+    for z in range(len(sorted_tract_sizes)):
+        if sorted_tract_sizes[z] < tract_plot2_max_size:
+            x = plot_window_margin + plot_window_left_space + (sorted_tract_sizes[z]/tract_plot2_max_size) * plot_dim_x
+            y_new = plot_window_margin + plot_dim_y - plot_dim_y * proportions_covered_by_tracts[z]
+            tract_plot2_svg_path_stroke.add_point(x, y_old)
+            tract_plot2_svg_path_fill.add_point(x, y_old)
+            tract_plot2_svg_path_stroke.add_point(x, y_new)
+            tract_plot2_svg_path_fill.add_point(x, y_new)
             y_old = y_new
-            x_old = x_new
-    else:
-        all_c_genes_smaller_than_threshold = False
-if all_c_genes_smaller_than_threshold == False:
-    x = plot_window_margin + plot_window_left_space + plot_dim_x
-    y = y_old
-    c_gene_plot2_svg_path_stroke.add_point(x, y)
-    c_gene_plot2_svg_path_fill.add_point(x, y)
-    y = plot_window_margin + plot_dim_y
-    c_gene_plot2_svg_path_fill.add_point(x, y)
-x = plot_window_margin + plot_window_left_space
-y = plot_window_margin + plot_dim_y
-c_gene_plot2_svg_path_fill.add_point(x, y)
-
-# Insert the svg elements into c-gene plot 2.
-c_gene_plot2_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
-c_gene_plot2_svg_string += '            <defs>\n'
-c_gene_plot2_svg_string += '              <linearGradient id="lin_grad1" x1="0%" y1="0%" x2="100%" y2="0%">\n'
-c_gene_plot2_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
-c_gene_plot2_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
-c_gene_plot2_svg_string += '              </linearGradient>\n'
-c_gene_plot2_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
-c_gene_plot2_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
-c_gene_plot2_svg_string += '              <marker>\n'
-c_gene_plot2_svg_string += '            </defs>\n'
-c_gene_plot2_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
-c_gene_plot2_svg_path_fill_svg = c_gene_plot2_svg_path_fill.to_svg().replace('fill=\"#ede7d4\"','fill=\"url(#lin_grad1)\"')
-c_gene_plot2_svg_string += '            {}\n'.format(c_gene_plot2_svg_path_fill_svg)
-for l in c_gene_plot2_svg_lines:
-    c_gene_plot2_svg_string += '            {}\n'.format(l.to_svg())
-for t in c_gene_plot2_svg_texts:
-    c_gene_plot2_svg_string += '            {}\n'.format(t.to_svg())
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start + plot_dim_x
-y_start = plot_window_margin + plot_dim_y
-y_end = y_start
-c_gene_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start
-y_end = plot_window_margin
-y_start = y_end + plot_dim_y
-c_gene_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-c_gene_plot2_svg_string += '            {}\n'.format(c_gene_plot2_svg_path_stroke.to_svg())
-c_gene_plot2_svg_string += '          </svg>\n'
-
-# Feedback.
-print(' done.')
-
-# Feedback.
-print('    Preparing single-topology tract plots...', end='', flush=True)
-
-# Determine the maximum single-topology tract size to plot in tract plot 1.
-tract_sizes_median = np.median(tract_sizes)
-if tract_sizes_median < 1:
-    tract_plot1_max_size = 5
-elif tract_sizes_median < 2:
-    tract_plot1_max_size = 10
-elif tract_sizes_median < 5:
-    tract_plot1_max_size = 20
-elif tract_sizes_median < 10:
-    tract_plot1_max_size = 50
-elif tract_sizes_median < 20:
-    tract_plot1_max_size = 100
-elif tract_sizes_median < 50:
-    tract_plot1_max_size = 200
-elif tract_sizes_median < 100:
-    tract_plot1_max_size = 500
-elif tract_sizes_median < 200:
-    tract_plot1_max_size = 1000
-elif tract_sizes_median < 500:
-    tract_plot1_max_size = 2000
-elif tract_sizes_median < 1000:
-    tract_plot1_max_size = 5000
-elif tract_sizes_median < 2000:
-    tract_plot1_max_size = 10000
-elif tract_sizes_median < 5000:
-    tract_plot1_max_size = 20000
-elif tract_sizes_median < 10000:
-    tract_plot1_max_size = 50000
-elif tract_sizes_median < 20000:
-    tract_plot1_max_size = 100000
-elif tract_sizes_median < 50000:
-    tract_plot1_max_size = 200000
-elif tract_sizes_median < 100000:
-    tract_plot1_max_size = 500000
-elif tract_sizes_median < 200000:
-    tract_plot1_max_size = 1000000
-elif tract_sizes_median < 500000:
-    tract_plot1_max_size = 2000000
-elif tract_sizes_median < 1000000:
-    tract_plot1_max_size = 5000000
-elif tract_sizes_median < 2000000:
-    tract_plot1_max_size = 10000000
-elif tract_sizes_median < 5000000:
-    tract_plot1_max_size = 20000000
-else:
-    tract_plot1_max_size = 50000000
-
-# Determine the size values of bin centers.
-tract_plot1_bin_number = 25
-tract_plot1_bin_centers = []
-tract_plot1_bin_width = tract_plot1_max_size/float(tract_plot1_bin_number)
-for x in range(tract_plot1_bin_number):
-    tract_plot1_bin_centers.append((tract_plot1_bin_width/2.0)+(x*tract_plot1_bin_width))
-
-# Fill the bins with counts of tracts.
-tract_plot1_bin_counts = []
-for x in range(tract_plot1_bin_number):
-    tract_plot1_bin_counts.append(0)
-for s in tract_sizes:
-    for x in range(tract_plot1_bin_number):
-        if s < tract_plot1_bin_centers[x]+(tract_plot1_bin_width/2.0) and s >= tract_plot1_bin_centers[x]-(tract_plot1_bin_width/2.0):
-            tract_plot1_bin_counts[x] += 1
-            break
-
-# Get the proportions of the genome covered by tracts of a given size or larger.
-sorted_tract_sizes = sorted(tract_sizes)
-proportions_covered_by_tracts = []
-smaller_tract_sizes_sum = 0
-for sorted_tract_size in sorted_tract_sizes:
-    smaller_tract_sizes_sum += sorted_tract_size
-    proportions_covered_by_tracts.append((tract_sizes_sum-smaller_tract_sizes_sum)/tract_sizes_sum)
-
-# Determine the maximum tract count per bin to plot.
-if max(tract_plot1_bin_counts) < 10:
-    tract_plot1_max_count = 10
-elif max(tract_plot1_bin_counts) < 20:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/2))*2
-elif max(tract_plot1_bin_counts) < 50:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/5))*5
-elif max(tract_plot1_bin_counts) < 100:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/10))*10
-elif max(tract_plot1_bin_counts) < 200:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/20))*20
-elif max(tract_plot1_bin_counts) < 500:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/50))*50
-elif max(tract_plot1_bin_counts) < 1000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/100))*100
-elif max(tract_plot1_bin_counts) < 2000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/200))*200
-elif max(tract_plot1_bin_counts) < 5000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/500))*500
-elif max(tract_plot1_bin_counts) < 10000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/1000))*1000
-elif max(tract_plot1_bin_counts) < 20000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/2000))*2000
-elif max(tract_plot1_bin_counts) < 50000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/5000))*5000
-elif max(tract_plot1_bin_counts) < 100000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/10000))*10000
-elif max(tract_plot1_bin_counts) < 200000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/20000))*20000
-elif max(tract_plot1_bin_counts) < 500000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/50000))*50000
-elif max(tract_plot1_bin_counts) < 1000000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/100000))*100000
-elif max(tract_plot1_bin_counts) < 2000000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/200000))*200000
-elif max(tract_plot1_bin_counts) < 5000000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/500000))*500000
-elif max(tract_plot1_bin_counts) < 10000000:
-    tract_plot1_max_count = (np.ceil(max(tract_plot1_bin_counts)/1000000))*1000000
-else:
-    tract_plot1_max_count = 20000000
-
-# Determine the number of tracts not shown.
-n_tracts_not_shown = 0
-for s in tract_sizes:
-    if s > tract_plot1_max_size:
-        n_tracts_not_shown += 1
-
-# Determine the values of ticks on the x axis.
-tract_plot1_size_ticks = [0]
-for x in range(10):
-    tract_plot1_size_ticks.append((x+1)*round((tract_plot1_max_size/10.0),1))
-
-# Determine the values of ticks on the y axis.
-tract_plot1_count_ticks = [0]
-tract_plot2_proportion_ticks = [0.0]
-for x in range(10):
-    tract_plot1_count_ticks.append((x+1)*round((tract_plot1_max_count/10.0),1))
-    tract_plot2_proportion_ticks.append(round(((x+1)/10.0),1))
-
-# Prepare to generate the svg elements for tract plot 1.
-tract_plot1_svg_lines = []
-tract_plot1_svg_rectangles = []
-tract_plot1_svg_texts = []
-
-# Add the ticks.
-for i in tract_plot1_size_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot1_max_size))
-    x_end = x_start
-    y_start = plot_window_margin + plot_dim_y
-    y_end = y_start + plot_tick_length
-    tract_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-
-for i in tract_plot1_count_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space
-    x_end = x_start - plot_tick_length
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(tract_plot1_max_count))
-    y_end = y_start
-    tract_plot1_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-
-# Add the text.
-all_integer = True
-for i in tract_plot1_size_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in tract_plot1_size_ticks:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot1_max_size))
-    y_start = plot_window_margin + plot_dim_y + 17
-    if all_integer:
-        tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
-    else:
-        tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
-x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
-y_start = plot_window_margin + plot_dim_y + 45
-tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'Single-topology tract size (bp)'))
-all_integer = True
-for i in tract_plot1_count_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in tract_plot1_count_ticks:
-    x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * (i / float(tract_plot1_max_count))
-    if all_integer:
-        tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
-    else:
-        tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
-x_start = plot_window_margin
-y_start = plot_window_margin + plot_dim_y * 0.5
-tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start, y_start), 'Frequency'))
-
-# Add the rectangles.
-for x in range(len(tract_plot1_bin_centers)):
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * ((tract_plot1_bin_centers[x]-tract_plot1_bin_width/2.0)/float(tract_plot1_max_size))
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * (tract_plot1_bin_counts[x] / float(tract_plot1_max_count))
-    width = plot_dim_x/len(tract_plot1_bin_centers)
-    height = plot_dim_y * (tract_plot1_bin_counts[x] / float(tract_plot1_max_count))
-    tract_plot1_svg_rectangles.append(Rectangle(x_start, y_start, width, height, 'none', '#92a0a0', 1, 1))
-
-# Identify the parameters of a Weibull distribution so that the median and mean are according to the median and mean tract sizes.
-tract_sizes_mean = np.mean(tract_sizes)
-best_wb_lambda = None
-best_wb_k = None
-best_fit = 1000000000
-step_size = 0.01
-# XXX TODO: Implement a faster way to fit the two parameters.
-# wb_lambda has to be at least as large as tract_sizes_median, otherwise wb_k would be negative.
-wb_lambda = tract_sizes_median
-optimum_found = False
-for _ in range(200000):
-    wb_lambda += step_size
-    wb_k = np.log(np.log(2)) / np.log(tract_sizes_median/wb_lambda)
-    wb_mean = wb_lambda * special.gamma(1.0 + 1.0/wb_k)
-    fit = abs(wb_mean - tract_sizes_mean)
-    if fit < best_fit:
-        best_wb_lambda = wb_lambda
-        best_wb_k = wb_k
-        best_fit = fit
-wb_k = best_wb_k
-wb_lambda = best_wb_lambda
-if wb_k == None:
-    wb_start = None
-elif wb_k < 1:
-    wb_start = None
-elif wb_k == 1:
-    wb_start = 1/wb_lambda
-else:
-    wb_start = 0
-if wb_start == None:
-    tract_plot1_svg_path = None
-else:
-    x_start = plot_window_margin + plot_window_left_space
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(tract_sizes) * tract_plot1_bin_width * wb_start) / float(tract_plot1_max_count))
-    tract_plot1_svg_path = Path(x_start, y_start, 'none', '#f5902f', 5, 1, False)
-for x in range(1000):
-    x_start = plot_window_margin + plot_window_left_space + ((x+1)/1000.0)*plot_dim_x
-    x_value_in_bp = ((x+1)/1000.0)*tract_plot1_max_size
-    wb_start = (wb_k/wb_lambda) * (x_value_in_bp/wb_lambda)**(wb_k-1) * np.exp(-(x_value_in_bp/wb_lambda)**wb_k)
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * ((len(tract_sizes) * tract_plot1_bin_width * wb_start) / float(tract_plot1_max_count))
-    if tract_plot1_svg_path == None:
-        tract_plot1_svg_path = Path(x_start, y_start, 'none', '#f5902f', 5, 1, False)
-    else:
-        tract_plot1_svg_path.add_point(x_start, y_start)
-
-# Add the figure legend.
-x_start = plot_window_margin + plot_window_left_space + plot_dim_x - 10
-y_start = plot_window_margin + 10
-tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#f5902f', 'end', 'top', None, 'Fitted Weibull distribution (&lambda; = {}, k = {})'.format(round(wb_lambda,3), round(wb_k,3))))
-y_start += 20
-tract_plot1_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#92a0a0', 'end', 'top', None, '{} tracts longer than {} bp not shown'.format(n_tracts_not_shown, tract_plot1_max_size)))
-
-# Insert the svg elements into tract plot 1.
-tract_plot1_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
-tract_plot1_svg_string += '            <defs>\n'
-tract_plot1_svg_string += '              <radialGradient id=\"rad_grad2\" cx=\"50%\" cy=\"50%\" r=\"50%\" fx=\"50%\" fy=\"50%\">\n'
-tract_plot1_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
-tract_plot1_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
-tract_plot1_svg_string += '              </radialGradient>\n'
-tract_plot1_svg_string += '              <clipPath id=\"cut2\">\n'
-tract_plot1_svg_string += '                <rect x=\"{0}\" y=\"{1}\" width=\"{2}\" height=\"{2}\" />\n'.format(plot_window_margin+plot_window_left_space, plot_window_margin, plot_dim_y)
-tract_plot1_svg_string += '              </clipPath>\n'
-tract_plot1_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
-tract_plot1_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
-tract_plot1_svg_string += '              <marker>\n'
-tract_plot1_svg_string += '            </defs>\n'
-tract_plot1_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
-tract_plot1_svg_string += '            <rect x=\"{0}\" y=\"0\" width=\"{1}\" height=\"{1}\" fill=\"url(#rad_grad2)\" clip-path=\"url(#cut2)\" fill-opacity=\"0.5\" />\n'.format(plot_window_margin+plot_window_left_space-plot_dim_y, 2*plot_dim_y)
-for r in tract_plot1_svg_rectangles:
-    tract_plot1_svg_string += '            {}\n'.format(r.to_svg())
-for l in tract_plot1_svg_lines:
-    tract_plot1_svg_string += '            {}\n'.format(l.to_svg())
-for t in tract_plot1_svg_texts:
-    tract_plot1_svg_string += '            {}\n'.format(t.to_svg())
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start + plot_dim_x
-y_start = plot_window_margin + plot_dim_y
-y_end = y_start
-tract_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start
-y_end = plot_window_margin
-y_start = y_end + plot_dim_y
-tract_plot1_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-tract_plot1_svg_string += '            {}\n'.format(tract_plot1_svg_path.to_svg())
-tract_plot1_svg_string += '          </svg>\n'
-
-# Determine the threshold tract size to plot in tract plot 2.
-threshold = 0.1
-for x in range(1,len(proportions_covered_by_tracts)):
-    if proportions_covered_by_tracts[x-1] > threshold and proportions_covered_by_tracts[x] <= threshold:
-        tract_threshold_size = sorted_tract_sizes[x]
-
-# Determine the maximum tract size to plot in tract plot 2.
-for x in [1, 10, 100, 1000, 10000, 100000, 1000000, 10000000]:
-    for y in range(1,10):
-        if tract_threshold_size < x*y:
-            tract_plot2_max_size = x*y
-            break
-    else:
-        continue
-    break
-
-# Determine the values of ticks on the x axis.
-tract_plot2_size_ticks = [0]
-for x in range(10):
-    tract_plot2_size_ticks.append((x+1)*round((tract_plot2_max_size/10.0),1))
-
-# Prepare to generate the svg elements for tract plot 2.
-tract_plot2_svg_lines = []
-tract_plot2_svg_rectangles = []
-tract_plot2_svg_texts = []
-
-# Add the ticks.
-for i in tract_plot2_size_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot2_max_size))
-    x_end = x_start
-    y_start = plot_window_margin + plot_dim_y
-    y_end = y_start + plot_tick_length
-    tract_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-for i in tract_plot2_proportion_ticks[:-1]:
-    x_start = plot_window_margin + plot_window_left_space
-    x_end = x_start - plot_tick_length
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
-    y_end = y_start
-    tract_plot2_svg_lines.append(Line(x_start, x_end, y_start, y_end, '#545860', 2, 1))
-
-# Add the text.
-all_integer = True
-for i in tract_plot2_size_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in tract_plot2_size_ticks:
-    x_start = plot_window_margin + plot_window_left_space + plot_dim_x * (i / float(tract_plot2_max_size))
-    y_start = plot_window_margin + plot_dim_y + 17
-    if all_integer:
-        tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, int(i)))
-    else:
-        tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'middle', 'middle', None, round(i,1)))
-x_start = plot_window_margin + plot_window_left_space + plot_dim_x * 0.5
-y_start = plot_window_margin + plot_dim_y + 45
-tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', None, 'Single-topology tract size (bp)'))
-all_integer = True
-for i in tract_plot2_proportion_ticks:
-    if round(i) != round(i,1):
-        all_integer = False
-for i in tract_plot2_proportion_ticks:
-    x_start = plot_window_margin + plot_window_left_space - plot_tick_length - 7
-    y_start = plot_window_margin + plot_dim_y - plot_dim_y * i
-    if all_integer:
-        tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, int(i)))
-    else:
-        tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 12, '#545860', 'end', 'middle', None, round(i,1)))
-x_start = plot_window_margin
-y_start = plot_window_margin + plot_dim_y * 0.5
-tract_plot2_svg_texts.append(Text(x_start, y_start, 'Helvetica', 15, '#545860', 'middle', 'middle', 'rotate(-90 {},{})'.format(x_start, y_start), 'Proportion of genome covered by single-topology tracts of at least this size'))
-
-# Add the path.
-x_start = plot_window_margin + plot_window_left_space
-y_start = plot_window_margin
-tract_plot2_svg_path_stroke = Path(x_start, y_start, 'none', '#f5902f', 5, 1, False)
-tract_plot2_svg_path_fill = Path(x_start, y_start, '#ede7d4', 'none', 0, 1, True)
-y_old = y_start
-all_tracts_smaller_than_threshold = True
-for z in range(len(sorted_tract_sizes)):
-    if sorted_tract_sizes[z] < tract_plot2_max_size:
-        x = plot_window_margin + plot_window_left_space + (sorted_tract_sizes[z]/tract_plot2_max_size) * plot_dim_x
-        y_new = plot_window_margin + plot_dim_y - plot_dim_y * proportions_covered_by_tracts[z]
-        tract_plot2_svg_path_stroke.add_point(x, y_old)
-        tract_plot2_svg_path_fill.add_point(x, y_old)
-        tract_plot2_svg_path_stroke.add_point(x, y_new)
-        tract_plot2_svg_path_fill.add_point(x, y_new)
-        y_old = y_new
-    else:
-        all_tracts_smaller_than_threshold = False
-if all_tracts_smaller_than_threshold == False:
-    x = plot_window_margin + plot_window_left_space + plot_dim_x
-    y = y_old
-    tract_plot2_svg_path_stroke.add_point(x, y)
-    tract_plot2_svg_path_fill.add_point(x, y)
+        else:
+            all_tracts_smaller_than_threshold = False
+    if all_tracts_smaller_than_threshold == False:
+        x = plot_window_margin + plot_window_left_space + plot_dim_x
+        y = y_old
+        tract_plot2_svg_path_stroke.add_point(x, y)
+        tract_plot2_svg_path_fill.add_point(x, y)
+        y = plot_window_margin + plot_dim_y
+        tract_plot2_svg_path_fill.add_point(x, y)
+    x = plot_window_margin + plot_window_left_space
     y = plot_window_margin + plot_dim_y
     tract_plot2_svg_path_fill.add_point(x, y)
-x = plot_window_margin + plot_window_left_space
-y = plot_window_margin + plot_dim_y
-tract_plot2_svg_path_fill.add_point(x, y)
 
-# Insert the svg elements into tract plot 2.
-tract_plot2_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
-tract_plot2_svg_string += '            <defs>\n'
-tract_plot2_svg_string += '              <linearGradient id="lin_grad2" x1="0%" y1="0%" x2="100%" y2="0%">\n'
-tract_plot2_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
-tract_plot2_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
-tract_plot2_svg_string += '              </linearGradient>\n'
-tract_plot2_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
-tract_plot2_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
-tract_plot2_svg_string += '              <marker>\n'
-tract_plot2_svg_string += '            </defs>\n'
-tract_plot2_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
+    # Insert the svg elements into tract plot 2.
+    tract_plot2_svg_string = '          <svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{}\" height=\"{}\" viewBox=\"0 0 {} {}\" xmlns:xlink=\"htttp://www.w3.org/1999/xlink\">\n'.format(plot_window_width, plot_window_height, plot_window_width, plot_window_height)
+    tract_plot2_svg_string += '            <defs>\n'
+    tract_plot2_svg_string += '              <linearGradient id="lin_grad2" x1="0%" y1="0%" x2="100%" y2="0%">\n'
+    tract_plot2_svg_string += '                <stop offset=\"0%\" style=\"stop-color:#ede7d4;stop-opacity:1\" />\n'
+    tract_plot2_svg_string += '                <stop offset=\"100%\" style=\"stop-color:white;stop-opacity:1\" />\n'
+    tract_plot2_svg_string += '              </linearGradient>\n'
+    tract_plot2_svg_string += '              <marker id=\"head\" orient=\"auto\" markerWidth=\"4\" markerHeight=\"8\" refX=\"0.1\" refY=\"4\">\n'
+    tract_plot2_svg_string += '                <path d=\"M0,0 V8 L4,4 Z\" fill=\"#545860\" />\n'
+    tract_plot2_svg_string += '              <marker>\n'
+    tract_plot2_svg_string += '            </defs>\n'
+    tract_plot2_svg_string += '            <path d=\"M {0} {5} L {1} {5} A {0},{0} 0 0 1 {2},{0} L {2} {3} A {0},{0} 0 0 1 {1},{4} L {0} {4} A {0},{0} 0 0 1 {5},{3} L {5} {0} A {0},{0} 0 0 1 {0} {5} z\" fill=\"#ede7d4\" stroke=\"#545860\" stroke-width=\"2\" fill-opacity=\"0.15\" />'.format(corner_radius, plot_window_width-corner_radius, plot_window_width-stroke_shift_to_inside, plot_window_height-corner_radius, plot_window_height-stroke_shift_to_inside, stroke_shift_to_inside)
 
-tract_plot2_svg_path_fill_svg = tract_plot2_svg_path_fill.to_svg().replace('fill=\"#ede7d4\"','fill=\"url(#lin_grad2)\"')
-tract_plot2_svg_string += "            {}\n".format(tract_plot2_svg_path_fill_svg)
-for l in tract_plot2_svg_lines:
-    tract_plot2_svg_string += '            {}\n'.format(l.to_svg())
-for t in tract_plot2_svg_texts:
-    tract_plot2_svg_string += '            {}\n'.format(t.to_svg())
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start + plot_dim_x
-y_start = plot_window_margin + plot_dim_y
-y_end = y_start
-tract_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-x_start = plot_window_margin + plot_window_left_space
-x_end = x_start
-y_end = plot_window_margin
-y_start = y_end + plot_dim_y
-tract_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
-tract_plot2_svg_string += '            {}\n'.format(tract_plot2_svg_path_stroke.to_svg())
-tract_plot2_svg_string += '          </svg>\n'
+    tract_plot2_svg_path_fill_svg = tract_plot2_svg_path_fill.to_svg().replace('fill=\"#ede7d4\"','fill=\"url(#lin_grad2)\"')
+    tract_plot2_svg_string += "            {}\n".format(tract_plot2_svg_path_fill_svg)
+    for l in tract_plot2_svg_lines:
+        tract_plot2_svg_string += '            {}\n'.format(l.to_svg())
+    for t in tract_plot2_svg_texts:
+        tract_plot2_svg_string += '            {}\n'.format(t.to_svg())
+    x_start = plot_window_margin + plot_window_left_space
+    x_end = x_start + plot_dim_x
+    y_start = plot_window_margin + plot_dim_y
+    y_end = y_start
+    tract_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    x_start = plot_window_margin + plot_window_left_space
+    x_end = x_start
+    y_end = plot_window_margin
+    y_start = y_end + plot_dim_y
+    tract_plot2_svg_string += '            <line marker-end=\"url(#head)\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{}\" stroke-width=\"{}\" stroke-opacity=\"{}\" />'.format(round(x_start,3), round(y_start,3), round(x_end,3), round(y_end,3), '#545860', 2, 1)
+    tract_plot2_svg_string += '            {}\n'.format(tract_plot2_svg_path_stroke.to_svg())
+    tract_plot2_svg_string += '          </svg>\n'
 
-# Feedback.
-print(' done.')
+    # Feedback.
+    print(' done.')
 
-# Feedback.
-print('    Calculating c-gene statistics...', end='', flush=True)
+    # Feedback.
+    print('    Calculating c-gene statistics...', end='', flush=True)
 
-# Calculate the total length of regions in which breakpoint-free alignments could start.
-c_gene_breakpoint_free_100_bp_region_startpoints = 0
-c_gene_breakpoint_free_200_bp_region_startpoints = 0
-c_gene_breakpoint_free_500_bp_region_startpoints = 0
-c_gene_breakpoint_free_1000_bp_region_startpoints = 0
-c_gene_breakpoint_free_2000_bp_region_startpoints = 0
-c_gene_breakpoint_free_5000_bp_region_startpoints = 0
-c_gene_breakpoint_free_10000_bp_region_startpoints = 0
-c_gene_breakpoint_free_20000_bp_region_startpoints = 0
-c_gene_breakpoint_free_50000_bp_region_startpoints = 0
-c_gene_breakpoint_free_100000_bp_region_startpoints = 0
-c_gene_breakpoint_free_200000_bp_region_startpoints = 0
-c_gene_breakpoint_free_500000_bp_region_startpoints = 0
-for s in c_gene_sizes:
-    if s >= 100:
-        c_gene_breakpoint_free_100_bp_region_startpoints += s - 100
-        if s >= 200:
-            c_gene_breakpoint_free_200_bp_region_startpoints += s - 200
-            if s >= 500:
-                c_gene_breakpoint_free_500_bp_region_startpoints += s - 500
-                if s >= 1000:
-                    c_gene_breakpoint_free_1000_bp_region_startpoints += s - 1000
-                    if s >= 2000:
-                        c_gene_breakpoint_free_2000_bp_region_startpoints += s - 2000
-                        if s >= 5000:
-                            c_gene_breakpoint_free_5000_bp_region_startpoints += s - 5000
-                            if s >= 10000:
-                                c_gene_breakpoint_free_10000_bp_region_startpoints += s - 10000
-                                if s >= 20000:
-                                    c_gene_breakpoint_free_20000_bp_region_startpoints += s - 20000
-                                    if s >= 50000:
-                                        c_gene_breakpoint_free_50000_bp_region_startpoints += s - 50000
-                                        if s >= 100000:
-                                            c_gene_breakpoint_free_100000_bp_region_startpoints += s - 100000
-                                            if s >= 200000:
-                                                c_gene_breakpoint_free_200000_bp_region_startpoints += s - 200000
-                                                if s >= 500000:
-                                                    c_gene_breakpoint_free_500000_bp_region_startpoints += s - 500000
+    # Calculate the total length of regions in which breakpoint-free alignments could start.
+    c_gene_breakpoint_free_100_bp_region_startpoints = 0
+    c_gene_breakpoint_free_200_bp_region_startpoints = 0
+    c_gene_breakpoint_free_500_bp_region_startpoints = 0
+    c_gene_breakpoint_free_1000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_2000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_5000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_10000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_20000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_50000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_100000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_200000_bp_region_startpoints = 0
+    c_gene_breakpoint_free_500000_bp_region_startpoints = 0
+    for s in c_gene_sizes:
+        if s >= 100:
+            c_gene_breakpoint_free_100_bp_region_startpoints += s - 100
+            if s >= 200:
+                c_gene_breakpoint_free_200_bp_region_startpoints += s - 200
+                if s >= 500:
+                    c_gene_breakpoint_free_500_bp_region_startpoints += s - 500
+                    if s >= 1000:
+                        c_gene_breakpoint_free_1000_bp_region_startpoints += s - 1000
+                        if s >= 2000:
+                            c_gene_breakpoint_free_2000_bp_region_startpoints += s - 2000
+                            if s >= 5000:
+                                c_gene_breakpoint_free_5000_bp_region_startpoints += s - 5000
+                                if s >= 10000:
+                                    c_gene_breakpoint_free_10000_bp_region_startpoints += s - 10000
+                                    if s >= 20000:
+                                        c_gene_breakpoint_free_20000_bp_region_startpoints += s - 20000
+                                        if s >= 50000:
+                                            c_gene_breakpoint_free_50000_bp_region_startpoints += s - 50000
+                                            if s >= 100000:
+                                                c_gene_breakpoint_free_100000_bp_region_startpoints += s - 100000
+                                                if s >= 200000:
+                                                    c_gene_breakpoint_free_200000_bp_region_startpoints += s - 200000
+                                                    if s >= 500000:
+                                                        c_gene_breakpoint_free_500000_bp_region_startpoints += s - 500000
 
-# Feedback.
-print(' done.')
+    # Feedback.
+    print(' done.')
 
-# Feedback.
-print('    Calculating single-topology tract statistics...', end='', flush=True)
+    # Feedback.
+    print('    Calculating single-topology tract statistics...', end='', flush=True)
 
-# Calculate the total length of regions in which breakpoint-free alignments could start.
-tract_breakpoint_free_100_bp_region_startpoints = 0
-tract_breakpoint_free_200_bp_region_startpoints = 0
-tract_breakpoint_free_500_bp_region_startpoints = 0
-tract_breakpoint_free_1000_bp_region_startpoints = 0
-tract_breakpoint_free_2000_bp_region_startpoints = 0
-tract_breakpoint_free_5000_bp_region_startpoints = 0
-tract_breakpoint_free_10000_bp_region_startpoints = 0
-tract_breakpoint_free_20000_bp_region_startpoints = 0
-tract_breakpoint_free_50000_bp_region_startpoints = 0
-tract_breakpoint_free_100000_bp_region_startpoints = 0
-tract_breakpoint_free_200000_bp_region_startpoints = 0
-tract_breakpoint_free_500000_bp_region_startpoints = 0
-for s in tract_sizes:
-    if s >= 100:
-        tract_breakpoint_free_100_bp_region_startpoints += s - 100
-        if s >= 200:
-            tract_breakpoint_free_200_bp_region_startpoints += s - 200
-            if s >= 500:
-                tract_breakpoint_free_500_bp_region_startpoints += s - 500
-                if s >= 1000:
-                    tract_breakpoint_free_1000_bp_region_startpoints += s - 1000
-                    if s >= 2000:
-                        tract_breakpoint_free_2000_bp_region_startpoints += s - 2000
-                        if s >= 5000:
-                            tract_breakpoint_free_5000_bp_region_startpoints += s - 5000
-                            if s >= 10000:
-                                tract_breakpoint_free_10000_bp_region_startpoints += s - 10000
-                                if s >= 20000:
-                                    tract_breakpoint_free_20000_bp_region_startpoints += s - 20000
-                                    if s >= 50000:
-                                        tract_breakpoint_free_50000_bp_region_startpoints += s - 50000
-                                        if s >= 100000:
-                                            tract_breakpoint_free_100000_bp_region_startpoints += s - 100000
-                                            if s >= 200000:
-                                                tract_breakpoint_free_200000_bp_region_startpoints += s - 200000
-                                                if s >= 500000:
-                                                    tract_breakpoint_free_500000_bp_region_startpoints += s - 500000
+    # Calculate the total length of regions in which breakpoint-free alignments could start.
+    tract_breakpoint_free_100_bp_region_startpoints = 0
+    tract_breakpoint_free_200_bp_region_startpoints = 0
+    tract_breakpoint_free_500_bp_region_startpoints = 0
+    tract_breakpoint_free_1000_bp_region_startpoints = 0
+    tract_breakpoint_free_2000_bp_region_startpoints = 0
+    tract_breakpoint_free_5000_bp_region_startpoints = 0
+    tract_breakpoint_free_10000_bp_region_startpoints = 0
+    tract_breakpoint_free_20000_bp_region_startpoints = 0
+    tract_breakpoint_free_50000_bp_region_startpoints = 0
+    tract_breakpoint_free_100000_bp_region_startpoints = 0
+    tract_breakpoint_free_200000_bp_region_startpoints = 0
+    tract_breakpoint_free_500000_bp_region_startpoints = 0
+    for s in tract_sizes:
+        if s >= 100:
+            tract_breakpoint_free_100_bp_region_startpoints += s - 100
+            if s >= 200:
+                tract_breakpoint_free_200_bp_region_startpoints += s - 200
+                if s >= 500:
+                    tract_breakpoint_free_500_bp_region_startpoints += s - 500
+                    if s >= 1000:
+                        tract_breakpoint_free_1000_bp_region_startpoints += s - 1000
+                        if s >= 2000:
+                            tract_breakpoint_free_2000_bp_region_startpoints += s - 2000
+                            if s >= 5000:
+                                tract_breakpoint_free_5000_bp_region_startpoints += s - 5000
+                                if s >= 10000:
+                                    tract_breakpoint_free_10000_bp_region_startpoints += s - 10000
+                                    if s >= 20000:
+                                        tract_breakpoint_free_20000_bp_region_startpoints += s - 20000
+                                        if s >= 50000:
+                                            tract_breakpoint_free_50000_bp_region_startpoints += s - 50000
+                                            if s >= 100000:
+                                                tract_breakpoint_free_100000_bp_region_startpoints += s - 100000
+                                                if s >= 200000:
+                                                    tract_breakpoint_free_200000_bp_region_startpoints += s - 200000
+                                                    if s >= 500000:
+                                                        tract_breakpoint_free_500000_bp_region_startpoints += s - 500000
 
-# Feedback.
-print(' done.')
+    # Feedback.
+    print(' done.')
 
 # Feedback.
 print('    Preparing the html output...', end='', flush=True)
@@ -2074,251 +2085,263 @@ html_string += '            </table>\n'
 html_string += '          </td>\n'
 html_string += '        </tr>\n'
 
-# The c-genes section.
-html_string += '        <tr class=\"smallSpaceUnder\">\n'
-html_string += '          <td style=\"font-size:30px; font-weight:bold\"><a href=\"https://www.jstor.org/stable/2419811\">c-genes</a></td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr class=\"spaceUnder\">\n'
-html_string += '          <td>\n'
-html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\"># c-genes</td>\n'
-html_string += '                <td>{}</td>\n'.format(len(c_gene_sizes))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Mean c-gene size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(np.mean(c_gene_sizes),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Median c-gene size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(c_gene_sizes_median,3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Minimum c-gene size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(min(c_gene_sizes),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Maximum c-gene size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(max(c_gene_sizes),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Summed c-gene size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(c_gene_sizes_sum,3))
-html_string += '              </tr>\n'
-html_string += '            </table>\n'
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr>\n'
-html_string += '          <td align=\"center\">\n'
-html_string += '{}\n'.format(c_gene_plot1_svg_string)
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr class=\"smallSpaceUnder\">\n'
-html_string += '          <td>\n'
-html_string += '          <br>\n'
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr>\n'
-html_string += '          <td align=\"center\">\n'
-html_string += '{}\n'.format(c_gene_plot2_svg_string)
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
-html_string += '          <td>\n'
-html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Alignment length</td>\n'
-html_string += '                <td width=\"340\" style=\"font-weight:bold\">Probability that alignment is within one c-gene</td>\n'
-html_string += '                <td width=\"340\" style=\"font-weight:bold\">Mean number of c-gene breakpoints in alignment</td>\n'
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">100 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_100_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(100/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">200 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_200_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(200/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">500 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_500_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(500/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">1000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_1000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(1000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">2000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_2000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(2000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">5000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_5000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(5000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">10000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_10000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(10000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">20000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_20000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(20000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">50000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_50000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(50000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">100000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_100000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(100000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">200000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_200000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(200000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">500000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_500000_bp_region_startpoints/float(c_gene_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(500000/c_gene_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '            </table>\n'
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
+# Only include c-gene and topology-tract output if requested.
+if exclude_c_genes == False:
 
-# The single-topology tracts section.
-html_string += '        <tr class=\"smallSpaceUnder\">\n'
-html_string += '          <td style=\"font-size:30px; font-weight:bold\">Single-topology tracts</td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr class=\"spaceUnder\">\n'
-html_string += '          <td>\n'
-html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\"># single-topology tracts</td>\n'
-html_string += '                <td>{}</td>\n'.format(len(tract_sizes))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Mean tract size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(tract_sizes_mean,3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Median tract size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(tract_sizes_median,3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Minimum tract size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(min(tract_sizes),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Maximum tract size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(max(tract_sizes),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Summed tract size</td>\n'
-html_string += '                <td>{}</td>\n'.format(round(tract_sizes_sum,3))
-html_string += '              </tr>\n'
-html_string += '            </table>\n'
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr>\n'
-html_string += '          <td align=\"center\">\n'
-html_string += '{}\n'.format(tract_plot1_svg_string)
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr class=\"smallSpaceUnder\">\n'
-html_string += '          <td>\n'
-html_string += '          <br>\n'
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr>\n'
-html_string += '          <td align=\"center\">\n'
-html_string += '{}\n'.format(tract_plot2_svg_string)
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
-html_string += '          <td>\n'
-html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
-html_string += '              <tr>\n'
-html_string += '                <td width=\"160\" style=\"font-weight:bold\">Alignment length</td>\n'
-html_string += '                <td width=\"340\" style=\"font-weight:bold\">Probability that alignment is within one tract</td>\n'
-html_string += '                <td width=\"340\" style=\"font-weight:bold\">Mean number of topology breakpoints in alignment</td>\n'
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">100 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_100_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(100/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">200 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_200_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(200/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">500 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_500_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(500/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">1000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_1000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(1000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">2000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_2000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(2000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">5000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_5000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(5000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">10000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_10000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(10000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">20000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_20000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(20000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">50000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_50000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(50000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">100000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_100000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(100000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">200000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_200000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(200000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '              <tr>\n'
-html_string += '                <td style=\"font-weight:bold\">500000 bp</td>\n'
-html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_500000_bp_region_startpoints/float(tract_sizes_sum),3))
-html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(500000/tract_sizes_sum),3))
-html_string += '              </tr>\n'
-html_string += '            </table>\n'
-html_string += '          </td>\n'
-html_string += '        </tr>\n'
-html_string += '\n'
+    # The c-genes section.
+    html_string += '        <tr class=\"smallSpaceUnder\">\n'
+    html_string += '          <td style=\"font-size:30px; font-weight:bold\"><a href=\"https://www.jstor.org/stable/2419811\">c-genes</a></td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr class=\"spaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\"># c-genes</td>\n'
+    html_string += '                <td>{}</td>\n'.format(len(c_gene_sizes))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Mean c-gene size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(np.mean(c_gene_sizes),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Median c-gene size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(c_gene_sizes_median,3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Minimum c-gene size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(min(c_gene_sizes),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Maximum c-gene size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(max(c_gene_sizes),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Summed c-gene size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(c_gene_sizes_sum,3))
+    html_string += '              </tr>\n'
+    html_string += '            </table>\n'
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr>\n'
+    html_string += '          <td align=\"center\">\n'
+    html_string += '{}\n'.format(c_gene_plot1_svg_string)
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr class=\"smallSpaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '          <br>\n'
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr>\n'
+    html_string += '          <td align=\"center\">\n'
+    html_string += '{}\n'.format(c_gene_plot2_svg_string)
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Alignment length</td>\n'
+    html_string += '                <td width=\"340\" style=\"font-weight:bold\">Probability that alignment is within one c-gene</td>\n'
+    html_string += '                <td width=\"340\" style=\"font-weight:bold\">Mean number of c-gene breakpoints in alignment</td>\n'
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">100 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_100_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(100/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">200 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_200_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(200/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">500 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_500_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(500/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">1000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_1000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(1000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">2000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_2000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(2000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">5000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_5000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(5000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">10000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_10000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(10000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">20000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_20000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(20000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">50000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_50000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(50000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">100000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_100000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(100000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">200000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_200000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(200000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">500000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(c_gene_breakpoint_free_500000_bp_region_startpoints/float(c_gene_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(c_gene_sizes)-1)*(500000/c_gene_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '            </table>\n'
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+
+    # The single-topology tracts section.
+    html_string += '        <tr class=\"smallSpaceUnder\">\n'
+    html_string += '          <td style=\"font-size:30px; font-weight:bold\">Single-topology tracts</td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr class=\"spaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\"># single-topology tracts</td>\n'
+    html_string += '                <td>{}</td>\n'.format(len(tract_sizes))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Mean tract size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(tract_sizes_mean,3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Median tract size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(tract_sizes_median,3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Minimum tract size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(min(tract_sizes),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Maximum tract size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(max(tract_sizes),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Summed tract size</td>\n'
+    html_string += '                <td>{}</td>\n'.format(round(tract_sizes_sum,3))
+    html_string += '              </tr>\n'
+    html_string += '            </table>\n'
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr>\n'
+    html_string += '          <td align=\"center\">\n'
+    html_string += '{}\n'.format(tract_plot1_svg_string)
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr class=\"smallSpaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '          <br>\n'
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr>\n'
+    html_string += '          <td align=\"center\">\n'
+    html_string += '{}\n'.format(tract_plot2_svg_string)
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td width=\"160\" style=\"font-weight:bold\">Alignment length</td>\n'
+    html_string += '                <td width=\"340\" style=\"font-weight:bold\">Probability that alignment is within one tract</td>\n'
+    html_string += '                <td width=\"340\" style=\"font-weight:bold\">Mean number of topology breakpoints in alignment</td>\n'
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">100 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_100_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(100/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">200 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_200_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(200/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">500 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_500_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(500/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">1000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_1000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(1000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">2000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_2000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(2000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">5000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_5000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(5000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">10000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_10000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(10000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">20000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_20000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(20000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">50000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_50000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(50000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">100000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_100000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(100000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">200000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_200000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(200000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '              <tr>\n'
+    html_string += '                <td style=\"font-weight:bold\">500000 bp</td>\n'
+    html_string += '                <td>{:.3f}</td>\n'.format(round(tract_breakpoint_free_500000_bp_region_startpoints/float(tract_sizes_sum),3))
+    html_string += '                <td>{:.3f}</td>\n'.format(round((len(tract_sizes)-1)*(500000/tract_sizes_sum),3))
+    html_string += '              </tr>\n'
+    html_string += '            </table>\n'
+    html_string += '          </td>\n'
+    html_string += '        </tr>\n'
+    html_string += '\n'
+
+# Finalize the html string.
+html_string += '      </table>\n'
+html_string += '    </div>\n'
+html_string += '  </body>\n'
+html_string += '</html>\n'
+html_string += ''
+html_string += ''
 
 # Write the html output file.
-outfile.write(html_string)
+html_outfile = open(html_outfile_name, 'w')
+html_outfile.write(html_string)
 
 # Feedback.
 print(' done.')
@@ -2326,5 +2349,7 @@ print('')
 
 # Feedback.
 print('  Output:')
-print('    Wrote file {}.'.format(outfile.name))
+print('    Wrote summary to file {}.'.format(html_outfile_name))
+if n_alignments > 0:
+    print('    Wrote alignments to file {}.'.format(phylip_outfile_name))
 print('')

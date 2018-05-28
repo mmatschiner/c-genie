@@ -619,17 +619,16 @@ if inlines[0][0:6].lower() == '#nexus':
                 elif in_comment == False:
                     tmp += letter
             clean_line = tmp
-        elif clean_line == ';':
-            in_tree = False
-        elif line.strip().lower() == 'begin trees;':
+        if line.strip().lower() == 'begin trees;':
             in_tree = True
         elif line.strip().lower() == 'end;':
             in_tree = False
         elif in_tree and line.strip() is not '':
-            tree_string_raw = clean_line
-            tree_patterns = re.search('\(.+\)',tree_string_raw)
-            tree_string = tree_patterns.group(0)
-            tree = Tree(tree_string)
+            if clean_line[0:4].lower() == "tree":
+                tree_string_raw = clean_line
+                tree_patterns = re.search('\(.+\)',tree_string_raw)
+                tree_string = tree_patterns.group(0)
+                tree = Tree(tree_string)
 else:
     # Test if the input is in newick format.
     if inlines[0][0] == '(':
@@ -647,6 +646,11 @@ else:
 # Feedback.
 print('  Analysis:')
 print('    Parsing the tree input file...', end='', flush=True)
+
+# Make sure a tree is found.
+if tree is None:
+    print('\nERROR: No tree could be found in file {}'.format(infile.name))
+    sys.exit(1)
 
 # Parse the newick tree string.
 tree.parse_newick_string()

@@ -1081,7 +1081,8 @@ if n_alignments > 0:
     ns_variants = []
     ns_c_gene_break_points = []
     ns_topology_break_points = []
-    ns_effective_topology_break_points = []
+    ns_topology_break_points_with_variants = []
+    ns_topology_break_points_with_pi_sites = []
     # Feedback.
     print('    Simulating gene sequence alignments for "gene tree" estimation...', end='', flush=True)
     DNA_alphabet = ['A','C','G','T']
@@ -1227,17 +1228,24 @@ if n_alignments > 0:
 
         # Calculate how many topology tracts do not have variants.
         n_aln_tracts_without_variants = 0
+        n_aln_tracts_without_pi_sites = 0
         for x in range(len(topology_breakpoint_positions)-1):
             variant_within_topology_tract = False
+            pi_site_within_topology_tract = False
             for variant in new_tree_sequence_obj.variants():
                 vp = int(variant.site.position)
                 if vp >= topology_breakpoint_positions[x] and vp < topology_breakpoint_positions[x+1]:
                     variant_within_topology_tract = True
-                    break
+                    if min(list(variant.genotypes).count(0),list(variant.genotypes).count(1)) > 1:
+                        pi_site_within_topology_tract = True
+                        break
             if variant_within_topology_tract == False:
                 n_aln_tracts_without_variants += 1
-        ns_effective_topology_break_points.append(ns_topology_break_points[i] - n_aln_tracts_without_variants)
-       
+            if pi_site_within_topology_tract == False:
+                n_aln_tracts_without_pi_sites += 1
+        ns_topology_break_points_with_variants.append(ns_topology_break_points[i] - n_aln_tracts_without_variants)
+        ns_topology_break_points_with_pi_sites.append(ns_topology_break_points[i] - n_aln_tracts_without_pi_sites)
+
         #print("alignment_length: " + str(alignment_length))
         #print("len(alignment[0]): " + str(len(alignment[0])))
         #print("len(alignment[1]): " + str(len(alignment[1])))
@@ -2719,7 +2727,7 @@ if n_alignments > 0:
             html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_names[i].split('/')[-1])
             html_string += '                <td>{}</td>\n'.format(ns_variants[i])
             html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
-            html_string += '                <td>{} ({})</td>\n'.format(ns_topology_break_points[i], ns_effective_topology_break_points[i])
+            html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
             html_string += '              </tr>\n'
     else:
         html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
@@ -2743,11 +2751,11 @@ if n_alignments > 0:
                 rec_rate_string_convert = rec_rate_string
             html_string += '                <td>{}</td>\n'.format(rec_rate_string_convert)
             html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
-            html_string += '                <td>{} ({})</td>\n'.format(ns_topology_break_points[i], ns_effective_topology_break_points[i])
+            html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
             html_string += '              </tr>\n'
 
     html_string += '            </table>\n'
-    html_string += '            <p><br>*Numbers in parentheses ignore those topology breakpoints that are not separated by variants.</p>\n'
+    html_string += '            <p><br>*Numbers in parentheses count only those topology breakpoints that are separated by variable sites / parsimony-informative sites.</p>\n'
     html_string += '          </td>\n'
     html_string += '        </tr>\n'
 

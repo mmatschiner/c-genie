@@ -1246,8 +1246,8 @@ if n_alignments > 0:
         alignment_dict = {}
         max_species_id_length = 0
         for sp in range(0,len(species_ids)):
-            if len(sp) > max_species_id_length:
-                max_species_id_length = len(sp)
+            if len(str(sp)) > max_species_id_length:
+                max_species_id_length = len(str(sp))
         for sp in range(0,len(species_ids)):
             alignment_file.write(species_ids[sp].ljust(max_species_id_length+2) + alignment[sp]+"\n")
             alignment_dict[species_ids[sp]] = alignment[sp]

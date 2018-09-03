@@ -1244,8 +1244,12 @@ if n_alignments > 0:
         alignment_file = open(phylip_outfile_names[i],'w')
         alignment_file.write(str(len(species_ids))+" "+str(alignment_length)+"\n")
         alignment_dict = {}
+        max_species_id_length = 0
         for sp in range(0,len(species_ids)):
-            alignment_file.write(species_ids[sp]+'\t'+alignment[sp]+"\n")
+            if len(sp) > max_species_id_length:
+                max_species_id_length = len(sp)
+        for sp in range(0,len(species_ids)):
+            alignment_file.write(species_ids[sp].ljust(max_species_id_length+2) + alignment[sp]+"\n")
             alignment_dict[species_ids[sp]] = alignment[sp]
             #print(species_ids[sp]+'\t'+alignment[sp])
        

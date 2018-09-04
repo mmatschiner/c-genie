@@ -2724,7 +2724,10 @@ if n_alignments > 0:
         html_string += '              </tr>\n'
         for i in range(0, n_alignments):
             html_string += '              <tr>\n'
-            html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_names[i].split('/')[-1])
+            phylip_outfile_name_abbreviated = phylip_outfile_names[i].split('/')[-1]
+            if len(phylip_outfile_name_abbreviated) > 20:
+                phylip_outfile_name_abbreviated = phylip_outfile_name_abbreviated[:10] + "..." + phylip_outfile_name_abbreviated[-10:]
+            html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_name_abbreviated)
             html_string += '                <td>{}</td>\n'.format(ns_variants[i])
             html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
             html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
@@ -2742,7 +2745,10 @@ if n_alignments > 0:
         html_string += '              </tr>\n'
         for i in range(0, n_alignments):
             html_string += '              <tr>\n'
-            html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_names[i].split('/')[-1])
+            phylip_outfile_name_abbreviated = phylip_outfile_names[i].split('/')[-1]
+            if len(phylip_outfile_name_abbreviated) > 20:
+                phylip_outfile_name_abbreviated = phylip_outfile_name_abbreviated[:10] + "..." + phylip_outfile_name_abbreviated[-10:]
+            html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_name_abbreviated)
             html_string += '                <td>{}</td>\n'.format(ns_variants[i])
             rec_rate_string = str(aln_rec_rates[i])
             if "e" in rec_rate_string:

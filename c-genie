@@ -593,7 +593,13 @@ group.add_argument(
     type=float,
     default=[2e-8],
     dest='mut_rate',
-    help='the per-genration mutation rate; used to generate the alignments for "gene tree" reconstruction (default: 2e-8)'
+    help='the per-generation mutation rate; used to generate the alignments for "gene tree" reconstruction (default: 2e-8)'
+        )
+group.add_argument(
+    '-p',
+    action='store_true',
+    dest='parsimony_score',
+    help='calculate parsimony-scores for all alignments (requires DendroPy and is computationally demanding)'
         )
 parser.add_argument(
     '-c',
@@ -632,6 +638,7 @@ html_outfile_name = args.prefix[0] + '.html'
 phylip_outfile_name = args.prefix[0] + '.phy'
 n_alignments = args.n_alignments[0]
 exclude_c_genes = False
+calculate_parsimony_scores = False
 if n_alignments > 0:
     phylip_outfile_names = []
     for i in range(0, n_alignments):
@@ -639,6 +646,7 @@ if n_alignments > 0:
     alignment_length = args.aln_length[0]
     mut_rate = args.mut_rate[0]
     exclude_c_genes = args.exclude
+    calculate_parsimony_scores = args.parsimony_score
     # alignment_file = open(phylip_outfile_name,'w')
 if infile.isatty():
     print('No input file specified, and no input piped through stdin!')
@@ -691,6 +699,8 @@ if n_alignments > 0:
         print('      -> skipping c-gene analysis; only generating alignments for "gene tree" reconstruction.')
     else:
         print('    Target number of c-genes: {}'.format(target_n_c_genes))
+    if calculate_parsimony_scores:
+        print('      -> calculating parsimony-scores for all alignments with DendroPy.')
 else:
     print('    Target number of c-genes: {}'.format(target_n_c_genes))
 print('')
@@ -1083,10 +1093,17 @@ if n_alignments > 0:
     ns_topology_break_points = []
     ns_topology_break_points_with_variants = []
     ns_topology_break_points_with_pi_sites = []
+    if calculate_parsimony_scores == True:
+        parsimony_scores = []
     # Feedback.
     print('    Simulating gene sequence alignments for "gene tree" estimation...', end='', flush=True)
     DNA_alphabet = ['A','C','G','T']
     aln_rec_rates = []
+
+    # Load the dendropy library if parsimony scores should be calculated.
+    if calculate_parsimony_scores == True:
+        import dendropy
+
     if rec_map != None:
         if os.path.isfile(rec_map):
             rec_map_file = open(rec_map,'r')
@@ -1142,6 +1159,7 @@ if n_alignments > 0:
             topology_string = re.sub(r':\d+\.\d+','', tree_string)
             aln_topology_strings.append(topology_string)
         ns_c_gene_break_points.append(n_c_gene_break_points)
+        pseudo_unique_aln_topology_strings = [aln_topology_strings[0]]
         # Count the number of topology breakpoints.
         n_topology_break_points = 0
         previous_topology_string = aln_topology_strings[0]
@@ -1174,6 +1192,7 @@ if n_alignments > 0:
                     n_topology_break_points = n_topology_break_points + 1
                     aln_tract_sizes.append(previous_topology_length)
                     previous_topology_length = aln_c_gene_sizes[x]
+                    pseudo_unique_aln_topology_strings.append(aln_topology_strings[x])
                 else:
                     previous_topology_length += aln_c_gene_sizes[x]
             else:
@@ -1251,28 +1270,36 @@ if n_alignments > 0:
         #print("len(alignment[1]): " + str(len(alignment[1])))
         alignment_file = open(phylip_outfile_names[i],'w')
         alignment_file.write(str(len(species_ids))+" "+str(alignment_length)+"\n")
-        alignment_dict = {}
+        unlabelled_alignment_dict = {}
         max_species_id_length = 8
         for sp in range(0,len(species_ids)):
             if len(str(sp)) > max_species_id_length:
                 max_species_id_length = len(str(sp))
         for sp in range(0,len(species_ids)):
             alignment_file.write(species_ids[sp].ljust(max_species_id_length+2) + alignment[sp]+"\n")
-            alignment_dict[species_ids[sp]] = alignment[sp]
+            unlabelled_alignment_dict[str(sp+1)] = alignment[sp]
             #print(species_ids[sp]+'\t'+alignment[sp])
-       
         alignment_file.write("\n")
         alignment_file.close()
-       
+
+        if calculate_parsimony_scores == True:
+            # Use dendropy to calculate the minimal parsimony score among the gene's tree topologies.
+            dendropy_taxon_namespace = dendropy.TaxonNamespace()
+            dendropy_alignment = dendropy.DnaCharacterMatrix.from_dict(unlabelled_alignment_dict, taxon_namespace=dendropy_taxon_namespace)
+            parsimony_scores_this_alignment = []
+            for pseudo_unique_aln_topology_string in pseudo_unique_aln_topology_strings:
+                dendropy_topology = dendropy.Tree.get(data=pseudo_unique_aln_topology_string + ";", schema="newick", taxon_namespace=dendropy_taxon_namespace)
+                parsimony_scores_this_alignment.append(dendropy.calculate.treescore.parsimony_score(dendropy_topology, dendropy_alignment))
+            parsimony_scores.append(min(parsimony_scores_this_alignment))
+
         # More feedback
         if i % 100 == 0:
             print('.', end='', flush=True)
-        
+
     # alignment_file.close()
     # phymlCommand = 'phyml -i ' + os.path.basename(alignment_file.name) + '-n ' + str(n_alignments) + '-b 0 -m JC69 -f e --no_memory_check --r_seed 100 --run_id phymlTest'
     #call(phymlCommand)
 
-    
     # Feedback.
     print(' done.')
 
@@ -2712,53 +2739,53 @@ if n_alignments > 0:
     html_string += '            </table>\n'
     html_string += '          </td>\n'
     html_string += '        </tr>\n'
+    html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
+    html_string += '          <td>\n'
+    html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
+    html_string += '              <tr>\n'
     if rec_map == None:
-        html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
-        html_string += '          <td>\n'
-        html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
-        html_string += '              <tr>\n'
-        html_string += '                <td width=\"210\" style=\"font-weight:bold\">Alignment file</td>\n'
-        html_string += '                <td width=\"210\" style=\"font-weight:bold\"># variable sites</td>\n'
-        html_string += '                <td width=\"210\" style=\"font-weight:bold\"># c-gene breakpoints</td>\n'
-        html_string += '                <td width=\"210\" style=\"font-weight:bold\"># topology breakpoints*</td>\n'
-        html_string += '              </tr>\n'
-        for i in range(0, n_alignments):
-            html_string += '              <tr>\n'
-            phylip_outfile_name_abbreviated = phylip_outfile_names[i].split('/')[-1]
-            if len(phylip_outfile_name_abbreviated) > 20:
-                phylip_outfile_name_abbreviated = phylip_outfile_name_abbreviated[:10] + "..." + phylip_outfile_name_abbreviated[-10:]
-            html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_name_abbreviated)
-            html_string += '                <td>{}</td>\n'.format(ns_variants[i])
-            html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
-            html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
-            html_string += '              </tr>\n'
+        if calculate_parsimony_scores == False:
+            left_width = 210
+            other_widths = 210
+        else:
+            left_width = 180
+            other_widths = 165
     else:
-        html_string += '        <tr class=\"spaceOverAndLargeSpaceUnder\">\n'
-        html_string += '          <td>\n'
-        html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
+        if calculate_parsimony_scores == False:
+            left_width = 180
+            other_widths = 165
+        else:
+            left_width = 140
+            other_widths = 140
+
+    html_string += '                <td width=\"{}\" style=\"font-weight:bold\">Alignment file</td>\n'.format(left_width)
+    html_string += '                <td width=\"{}\" style=\"font-weight:bold\"># variable sites</td>\n'.format(other_widths)
+    if rec_map != None:
+        html_string += '                <td width=\"{}\" style=\"font-weight:bold\">Recombination rate</td>\n'.format(other_widths)
+    html_string += '                <td width=\"{}\" style=\"font-weight:bold\"># c-gene breakpoints</td>\n'.format(other_widths)
+    html_string += '                <td width=\"{}\" style=\"font-weight:bold\"># topology breakpoints*</td>\n'.format(other_widths)
+    if calculate_parsimony_scores:
+        html_string += '                <td width=\"{}\" style=\"font-weight:bold\">parsimony score</td>\n'.format(other_widths)
+    html_string += '              </tr>\n'
+    for i in range(0, n_alignments):
         html_string += '              <tr>\n'
-        html_string += '                <td width=\"180\" style=\"font-weight:bold\">Alignment file</td>\n'
-        html_string += '                <td width=\"165\" style=\"font-weight:bold\"># variable sites</td>\n'
-        html_string += '                <td width=\"165\" style=\"font-weight:bold\">Recombination rate</td>\n'
-        html_string += '                <td width=\"165\" style=\"font-weight:bold\"># c-gene breakpoints</td>\n'
-        html_string += '                <td width=\"165\" style=\"font-weight:bold\"># topology breakpoints*</td>\n'
-        html_string += '              </tr>\n'
-        for i in range(0, n_alignments):
-            html_string += '              <tr>\n'
-            phylip_outfile_name_abbreviated = phylip_outfile_names[i].split('/')[-1]
-            if len(phylip_outfile_name_abbreviated) > 20:
-                phylip_outfile_name_abbreviated = phylip_outfile_name_abbreviated[:10] + "..." + phylip_outfile_name_abbreviated[-10:]
-            html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_name_abbreviated)
-            html_string += '                <td>{}</td>\n'.format(ns_variants[i])
+        phylip_outfile_name_abbreviated = phylip_outfile_names[i].split('/')[-1]
+        if len(phylip_outfile_name_abbreviated) > 15:
+            phylip_outfile_name_abbreviated = phylip_outfile_name_abbreviated[:10] + "..." + phylip_outfile_name_abbreviated[-5:]
+        html_string += '                <td style=\"font-weight:bold\"><a href=\"{}\">{}</a></td>\n'.format(phylip_outfile_names[i], phylip_outfile_name_abbreviated)
+        html_string += '                <td>{}</td>\n'.format(ns_variants[i])
+        if rec_map != None:
             rec_rate_string = str(aln_rec_rates[i])
             if "e" in rec_rate_string:
                 rec_rate_string_convert = "{:.3f}".format(float(rec_rate_string.split("e")[0])) + " &times; 10<sup>" + str(int(rec_rate_string.split("e")[1])) + "</sup>"
             else:
                 rec_rate_string_convert = rec_rate_string
             html_string += '                <td>{}</td>\n'.format(rec_rate_string_convert)
-            html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
-            html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
-            html_string += '              </tr>\n'
+        html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
+        html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
+        if calculate_parsimony_scores:
+            html_string += '                <td>{}</td>\n'.format(parsimony_scores[i])
+        html_string += '              </tr>\n'
 
     html_string += '            </table>\n'
     html_string += '            <p><br>*Numbers in parentheses count only those topology breakpoints that are separated by variable sites / parsimony-informative sites.</p>\n'

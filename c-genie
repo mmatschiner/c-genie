@@ -1159,7 +1159,7 @@ if n_alignments > 0:
             topology_string = re.sub(r':\d+\.\d+','', tree_string)
             aln_topology_strings.append(topology_string)
         ns_c_gene_break_points.append(n_c_gene_break_points)
-        pseudo_unique_aln_topology_strings = [aln_topology_strings[0]]
+        unique_aln_topology_strings = [aln_topology_strings[0]]
         # Count the number of topology breakpoints.
         n_topology_break_points = 0
         previous_topology_string = aln_topology_strings[0]
@@ -1192,7 +1192,8 @@ if n_alignments > 0:
                     n_topology_break_points = n_topology_break_points + 1
                     aln_tract_sizes.append(previous_topology_length)
                     previous_topology_length = aln_c_gene_sizes[x]
-                    pseudo_unique_aln_topology_strings.append(aln_topology_strings[x])
+                    if aln_topology_strings[x] not in unique_aln_topology_strings:
+                        unique_aln_topology_strings.append(aln_topology_strings[x])
                 else:
                     previous_topology_length += aln_c_gene_sizes[x]
             else:
@@ -1287,8 +1288,8 @@ if n_alignments > 0:
             dendropy_taxon_namespace = dendropy.TaxonNamespace()
             dendropy_alignment = dendropy.DnaCharacterMatrix.from_dict(unlabelled_alignment_dict, taxon_namespace=dendropy_taxon_namespace)
             parsimony_scores_this_alignment = []
-            for pseudo_unique_aln_topology_string in pseudo_unique_aln_topology_strings:
-                dendropy_topology = dendropy.Tree.get(data=pseudo_unique_aln_topology_string + ";", schema="newick", taxon_namespace=dendropy_taxon_namespace)
+            for unique_aln_topology_string in unique_aln_topology_strings:
+                dendropy_topology = dendropy.Tree.get(data=unique_aln_topology_string + ";", schema="newick", taxon_namespace=dendropy_taxon_namespace)
                 parsimony_scores_this_alignment.append(dendropy.calculate.treescore.parsimony_score(dendropy_topology, dendropy_alignment))
             parsimony_scores.append(min(parsimony_scores_this_alignment))
 

@@ -516,7 +516,7 @@ parser = argparse.ArgumentParser(
 parser.add_argument(
     '-v', '--version',
     action='version',
-    version='%(prog)s 0.1'
+    version='%(prog)s 0.2'
     )
 parser.add_argument(
     '-n',
@@ -618,6 +618,12 @@ group.add_argument(
     dest='mut_rate',
     help='per-generation mutation rate (default: 2e-8)'
         )
+group.add_argument(
+    '-d',
+    action='store_true',
+    dest='diploid',
+    help='simulate diploid individuals (default: off - individuals are haploid)'
+        )
 
 group = parser.add_argument_group('optional arguments for alignment generation (only used with option "-a")')
 group.add_argument(
@@ -667,9 +673,13 @@ if run_c_gene_analysis:
     target_n_c_genes = args.n_c_genes[0]
     n_cpus = args.n_cpus[0]
 
-# Get the mutation rate if needed.
+# Get the mutation rate and the diploid flag if needed.
 if write_vcf or generate_alignments:
     mut_rate = args.mut_rate[0]
+    diploid = args.diploid
+
+# Get the vcf output file name.
+if write_vcf:
     vcf_outfile_name = prefix + '.vcf'
 
 # Get alignment-generation settings if needed.
@@ -731,6 +741,10 @@ if write_vcf:
     print('  VCF generation settings:')
     print('    VCF output file name: {}'.format(vcf_outfile_name))
     print('    Mutation rate: {} per generation'.format(mut_rate))
+    if diploid:
+        print('    Ploidy: 2')
+    else:
+        print('    Ploidy: 1')
 else:
     print('  VCF generation settings:')
     print('    Off')
@@ -739,6 +753,10 @@ if generate_alignments:
     print('  Alignment generation settings:')
     print('    Alignment output file names: {}'.format(prefix + '_*.phy'))
     print('    Mutation rate: {} per generation'.format(mut_rate))
+    if diploid:
+        print('    Ploidy: 2')
+    else:
+        print('    Ploidy: 1')
     print('    Number of alignments: {}'.format(n_alignments))
     print('    Length of alignments: {} bp'.format(alignment_length))
     if calculate_parsimony_scores:
@@ -954,7 +972,6 @@ else:
 print('    Preparing msprime analyses...', end='', flush=True)
 
 # Define the tree for msprime.
-diploid = True
 population_configurations = []
 if diploid:
     population_configurations_diploid = []

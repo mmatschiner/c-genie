@@ -646,8 +646,15 @@ group.add_argument(
     '-p',
     action='store_true',
     dest='parsimony_score',
-    help='calculate parsimony-scores for all alignments (requires DendroPy and is computationally demanding)'
+    help='calculate parsimony-scores for all alignments (requires DendroPy and is computationally demanding) (default: off - do not calculate)'
         )
+group.add_argument(
+    '-q',
+    action='store_true',
+    dest='top_breakpoints',
+    help='calculate topology breakpoints for all alignments (default: off - do not calculate)'
+        )
+
 
 # Parse command-line arguments.
 args = parser.parse_args()
@@ -690,6 +697,7 @@ if generate_alignments:
         phylip_outfile_names.append(prefix + '_' + str(i+1).zfill(len(str(n_alignments))) + '.phy')
     alignment_length = args.aln_size[0]
     calculate_parsimony_scores = args.parsimony_score
+    calculate_topology_breakpoints_per_alignment = args.top_breakpoints
 
 # Quit if no input is provided.
 if infile.isatty():
@@ -763,6 +771,10 @@ if generate_alignments:
         print('    Parsimony-score calculation: on')
     else:
         print('    Parsimony-score calculation: off')
+    if calculate_topology_breakpoints_per_alignment:
+        print('    Topology-breakpoint calculation: on')
+    else:
+        print('    Topology-breakpoint calculation: off')
 else:
     print('  Alignment generation settings:')
     print('    Off')
@@ -1288,69 +1300,76 @@ if generate_alignments:
             this_tree_to_append.append(tree.interval[1]-tree.interval[0])
             this_tree_to_append.append(tree.newick())
             tree_sequences.append(this_tree_to_append)
-        # Reduce tree information to topology information and count the number of c-genes.
-        aln_c_gene_sizes = []
-        aln_tract_sizes = []
-        aln_tree_strings = []
-        aln_topology_strings = []
-        n_c_gene_break_points = -1
-        for length_and_tree in tree_sequences:
-            n_c_gene_break_points += 1
-            length = int(length_and_tree[0])
-            aln_c_gene_sizes.append(length)
-            tree_string = length_and_tree[1].rstrip(';')
-            aln_tree_strings.append(tree_string)
-            topology_string = re.sub(r':\d+\.\d+','', tree_string)
-            aln_topology_strings.append(topology_string)
-        ns_c_gene_break_points.append(n_c_gene_break_points)
-        unique_aln_topology_strings = [aln_topology_strings[0]]
-        # Count the number of topology breakpoints.
-        n_topology_break_points = 0
-        previous_topology_string = aln_topology_strings[0]
-        previous_topology_length = aln_c_gene_sizes[0]
-        for x in range(1, len(aln_topology_strings)):
-            # Only parse trees if the topology strings differ.
-            if aln_topology_strings[x] != previous_topology_string:
-                # Make sure the two trees are really different.
-                tree1 = Tree(aln_tree_strings[x-1])
-                tree1.parse_newick_string()
-                tree1.set_extant_progeny_ids()
-                tree2 = Tree(aln_tree_strings[x])
-                tree2.parse_newick_string()
-                tree2.set_extant_progeny_ids()
-                clades1 = []
-                for edge in tree1.get_edges():
-                    extant_progeny_ids = edge.get_extant_progeny_ids()
-                    extant_progeny_ids.sort()
-                    if len(extant_progeny_ids) > 1:
-                        clades1.append(extant_progeny_ids)
-                clades1.sort()
-                clades2 = []
-                for edge in tree2.get_edges():
-                    extant_progeny_ids = edge.get_extant_progeny_ids()
-                    extant_progeny_ids.sort()
-                    if len(extant_progeny_ids) > 1:
-                        clades2.append(extant_progeny_ids)
-                clades2.sort()
-                if clades1 != clades2:
-                    n_topology_break_points = n_topology_break_points + 1
-                    aln_tract_sizes.append(previous_topology_length)
-                    previous_topology_length = aln_c_gene_sizes[x]
-                    if aln_topology_strings[x] not in unique_aln_topology_strings:
-                        unique_aln_topology_strings.append(aln_topology_strings[x])
+        if calculate_topology_breakpoints_per_alignment:
+            # Reduce tree information to topology information and count the number of c-genes.
+            aln_c_gene_sizes = []
+            aln_tract_sizes = []
+            aln_tree_strings = []
+            aln_topology_strings = []
+            n_c_gene_break_points = -1
+            for length_and_tree in tree_sequences:
+                n_c_gene_break_points += 1
+                length = int(length_and_tree[0])
+                aln_c_gene_sizes.append(length)
+                tree_string = length_and_tree[1].rstrip(';')
+                aln_tree_strings.append(tree_string)
+                topology_string = re.sub(r':\d+\.\d+','', tree_string)
+                aln_topology_strings.append(topology_string)
+            ns_c_gene_break_points.append(n_c_gene_break_points)
+            unique_aln_topology_strings = [aln_topology_strings[0]]
+            # Count the number of topology breakpoints.
+            n_topology_break_points = 0
+            previous_topology_string = aln_topology_strings[0]
+            previous_topology_length = aln_c_gene_sizes[0]
+            for x in range(1, len(aln_topology_strings)):
+                # Only parse trees if the topology strings differ.
+                if aln_topology_strings[x] != previous_topology_string:
+                    # Make sure the two trees are really different.
+                    tree1 = Tree(aln_tree_strings[x-1])
+                    tree1.parse_newick_string()
+                    tree1.set_extant_progeny_ids()
+                    tree2 = Tree(aln_tree_strings[x])
+                    tree2.parse_newick_string()
+                    tree2.set_extant_progeny_ids()
+                    clades1 = []
+                    for edge in tree1.get_edges():
+                        extant_progeny_ids = edge.get_extant_progeny_ids()
+                        extant_progeny_ids.sort()
+                        if len(extant_progeny_ids) > 1:
+                            clades1.append(extant_progeny_ids)
+                    clades1.sort()
+                    clades2 = []
+                    for edge in tree2.get_edges():
+                        extant_progeny_ids = edge.get_extant_progeny_ids()
+                        extant_progeny_ids.sort()
+                        if len(extant_progeny_ids) > 1:
+                            clades2.append(extant_progeny_ids)
+                    clades2.sort()
+                    if clades1 != clades2:
+                        n_topology_break_points = n_topology_break_points + 1
+                        aln_tract_sizes.append(previous_topology_length)
+                        previous_topology_length = aln_c_gene_sizes[x]
+                        if aln_topology_strings[x] not in unique_aln_topology_strings:
+                            unique_aln_topology_strings.append(aln_topology_strings[x])
+                    else:
+                        previous_topology_length += aln_c_gene_sizes[x]
                 else:
                     previous_topology_length += aln_c_gene_sizes[x]
-            else:
-                previous_topology_length += aln_c_gene_sizes[x]
-            previous_topology_string = aln_topology_strings[x]
-        ns_topology_break_points.append(n_topology_break_points)
-        # Determine the topology breakpoint positions.
-        topology_breakpoint_positions = [0]
-        aln_tract_size_sum = 0
-        for aln_tract_size in aln_tract_sizes:
-            aln_tract_size_sum += aln_tract_size
-            topology_breakpoint_positions.append(aln_tract_size_sum)
-        topology_breakpoint_positions.append(alignment_length)
+                previous_topology_string = aln_topology_strings[x]
+            ns_topology_break_points.append(n_topology_break_points)
+            # Determine the topology breakpoint positions.
+            topology_breakpoint_positions = [0]
+            aln_tract_size_sum = 0
+            for aln_tract_size in aln_tract_sizes:
+                aln_tract_size_sum += aln_tract_size
+                topology_breakpoint_positions.append(aln_tract_size_sum)
+            topology_breakpoint_positions.append(alignment_length)
+        else:
+            n_c_gene_break_points = -1
+            for length_and_tree in tree_sequences:
+                n_c_gene_break_points += 1
+            ns_c_gene_break_points.append(n_c_gene_break_points)
+
 
         # Begin preparing the sequence alignments.
         # Initiate an alignment as a list of strings.
@@ -1393,24 +1412,25 @@ if generate_alignments:
                 alignment[sp] =  alignment[sp] + thisBase
 
         # Calculate how many topology tracts do not have variants.
-        n_aln_tracts_without_variants = 0
-        n_aln_tracts_without_pi_sites = 0
-        for x in range(len(topology_breakpoint_positions)-1):
-            variant_within_topology_tract = False
-            pi_site_within_topology_tract = False
-            for variant in new_tree_sequence_obj.variants():
-                vp = int(variant.site.position)
-                if vp >= topology_breakpoint_positions[x] and vp < topology_breakpoint_positions[x+1]:
-                    variant_within_topology_tract = True
-                    if min(list(variant.genotypes).count(0),list(variant.genotypes).count(1)) > 1:
-                        pi_site_within_topology_tract = True
-                        break
-            if variant_within_topology_tract == False:
-                n_aln_tracts_without_variants += 1
-            if pi_site_within_topology_tract == False:
-                n_aln_tracts_without_pi_sites += 1
-        ns_topology_break_points_with_variants.append(ns_topology_break_points[i] - n_aln_tracts_without_variants)
-        ns_topology_break_points_with_pi_sites.append(ns_topology_break_points[i] - n_aln_tracts_without_pi_sites)
+        if calculate_topology_breakpoints_per_alignment:
+            n_aln_tracts_without_variants = 0
+            n_aln_tracts_without_pi_sites = 0
+            for x in range(len(topology_breakpoint_positions)-1):
+                variant_within_topology_tract = False
+                pi_site_within_topology_tract = False
+                for variant in new_tree_sequence_obj.variants():
+                    vp = int(variant.site.position)
+                    if vp >= topology_breakpoint_positions[x] and vp < topology_breakpoint_positions[x+1]:
+                        variant_within_topology_tract = True
+                        if min(list(variant.genotypes).count(0),list(variant.genotypes).count(1)) > 1:
+                            pi_site_within_topology_tract = True
+                            break
+                if variant_within_topology_tract == False:
+                    n_aln_tracts_without_variants += 1
+                if pi_site_within_topology_tract == False:
+                    n_aln_tracts_without_pi_sites += 1
+            ns_topology_break_points_with_variants.append(ns_topology_break_points[i] - n_aln_tracts_without_variants)
+            ns_topology_break_points_with_pi_sites.append(ns_topology_break_points[i] - n_aln_tracts_without_pi_sites)
 
         alignment_file = open(phylip_outfile_names[i],'w')
         alignment_file.write(str(len(alignment))+" "+str(alignment_length)+"\n")
@@ -2887,19 +2907,11 @@ if generate_alignments:
     html_string += '            <table width=\"840\" border=\"0\" cellpadding=\"0\" cellspacing=\"1\">\n'
     html_string += '              <tr>\n'
     if rec_map == None:
-        if calculate_parsimony_scores == False:
-            left_width = 210
-            other_widths = 210
-        else:
-            left_width = 180
-            other_widths = 165
+        left_width = 180
+        other_widths = 165
     else:
-        if calculate_parsimony_scores == False:
-            left_width = 180
-            other_widths = 165
-        else:
-            left_width = 140
-            other_widths = 140
+        left_width = 140
+        other_widths = 140
 
     html_string += '                <td width=\"{}\" style=\"font-weight:bold\">Alignment file</td>\n'.format(left_width)
     html_string += '                <td width=\"{}\" style=\"font-weight:bold\"># variable sites</td>\n'.format(other_widths)
@@ -2907,8 +2919,7 @@ if generate_alignments:
         html_string += '                <td width=\"{}\" style=\"font-weight:bold\">Recombination rate</td>\n'.format(other_widths)
     html_string += '                <td width=\"{}\" style=\"font-weight:bold\"># c-gene breakpoints</td>\n'.format(other_widths)
     html_string += '                <td width=\"{}\" style=\"font-weight:bold\"># topology breakpoints*</td>\n'.format(other_widths)
-    if calculate_parsimony_scores:
-        html_string += '                <td width=\"{}\" style=\"font-weight:bold\">parsimony score</td>\n'.format(other_widths)
+    html_string += '                <td width=\"{}\" style=\"font-weight:bold\">parsimony score</td>\n'.format(other_widths)
     html_string += '              </tr>\n'
     for i in range(0, n_alignments):
         html_string += '              <tr>\n'
@@ -2925,13 +2936,19 @@ if generate_alignments:
                 rec_rate_string_convert = rec_rate_string
             html_string += '                <td>{}</td>\n'.format(rec_rate_string_convert)
         html_string += '                <td>{}</td>\n'.format(ns_c_gene_break_points[i])
-        html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
+        if calculate_topology_breakpoints_per_alignment:
+            html_string += '                <td>{} ({}/{})</td>\n'.format(ns_topology_break_points[i], ns_topology_break_points_with_variants[i], ns_topology_break_points_with_pi_sites[i])
+        else:
+            html_string += '                <td>not calculated</td>\n'
         if calculate_parsimony_scores:
             html_string += '                <td>{}</td>\n'.format(parsimony_scores[i])
+        else:
+            html_string += '                <td>not calculated</td>\n'
         html_string += '              </tr>\n'
 
     html_string += '            </table>\n'
-    html_string += '            <p><br>*Numbers in parentheses count only those topology breakpoints that are separated by variable sites / parsimony-informative sites.</p>\n'
+    if calculate_topology_breakpoints_per_alignment:
+        html_string += '            <p><br>*Numbers in parentheses count only those topology breakpoints that are separated by variable sites / parsimony-informative sites.</p>\n'
     html_string += '          </td>\n'
     html_string += '        </tr>\n'
 

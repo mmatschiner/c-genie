@@ -681,6 +681,7 @@ if run_c_gene_analysis:
     n_cpus = args.n_cpus[0]
 
 # Get the mutation rate and the diploid flag if needed.
+diploid = False
 if write_vcf or generate_alignments:
     mut_rate = args.mut_rate[0]
     diploid = args.diploid
